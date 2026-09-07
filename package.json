@@ -1,0 +1,16 @@
+{
+  "name": "site-one-wordpress-chatgpt-bridge",
+  "version": "1.0.2",
+  "private": true,
+  "type": "module",
+  "description": "Restricted local bridge between a private ChatGPT GPT Action and WordPress REST API.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js",
+    "generate-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+    "render-openapi": "node scripts/render-openapi.mjs"
+  }
+}
