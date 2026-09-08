@@ -13,11 +13,15 @@ test("GPT schema has 12 operations covering all 81 capabilities exactly once wit
   const schema = buildGptSchema("https://example.test");
   assert.equal(Object.keys(schema.paths).length, 12);
   assert.equal(operations.size, 81);
+  assert.deepEqual(schema.components.schemas, {});
   const actions = [];
   for (const [group, ids] of Object.entries(groups)) {
     const op = schema.paths[`/gpt/${group}`].post;
+    const requestSchema = op.requestBody.content["application/json"].schema;
+    assert.equal(requestSchema.type, "object");
+    assert.ok(Array.isArray(requestSchema.oneOf));
     assert.equal(op["x-openai-isConsequential"], ids.some((id) => operations.get(id).method !== "GET"));
-    for (const variant of op.requestBody.content["application/json"].schema.oneOf) {
+    for (const variant of requestSchema.oneOf) {
       const id = variant.properties.action.enum[0];
       actions.push(id);
       assert.deepEqual(variant.properties.body, operations.get(id).spec.requestBody?.content?.["application/json"]?.schema);

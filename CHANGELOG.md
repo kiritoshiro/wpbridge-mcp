@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make the grouped GPT schema importer-compatible by declaring every request body as an object and emitting an explicit `components.schemas` object.
 - Condense Custom GPT instructions below the editor's 8,000-character limit and enforce the limit in CI while retaining grouped-tool, edit-preview, publication, retry, recovery, and safety guidance.
 - Add 12 authenticated GPT groups covering all 81 original actions with typed action-specific envelopes and a fixed dispatch allowlist.
 - Generate openapi.gpt.yaml for the 30-operation editor limit; keep the full REST API intact. Preserve original handler guards, idempotency and activity targets.
