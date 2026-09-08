@@ -19,6 +19,10 @@
   },
   "dependencies": {
     "sharp": "0.35.4",
-    "yaml": "2.9.0"
+    "yaml": "2.9.0",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "yazl": "3.3.1"
   }
 }

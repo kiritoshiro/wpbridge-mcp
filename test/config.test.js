@@ -104,12 +104,16 @@ test("conversation image limits and optimization settings are bounded and consis
     IMAGE_OPTIMIZE_THRESHOLD_BYTES: "1500000",
     IMAGE_OPTIMIZE_MAX_DIMENSION: "1920",
     IMAGE_OPTIMIZE_QUALITY: "82",
+    MAX_ARCHIVE_ENTRIES: "1000",
+    MAX_EXTRACTED_IMAGES: "50",
   });
   assert.equal(cfg.maxSourceImageBytes, 20_000_000);
   assert.equal(cfg.maxSourceImageBatchBytes, 50_000_000);
   assert.equal(cfg.imageOptimizeThresholdBytes, 1_500_000);
   assert.equal(cfg.imageOptimizeMaxDimension, 1920);
   assert.equal(cfg.imageOptimizeQuality, 82);
+  assert.equal(cfg.maxArchiveEntries, 1000);
+  assert.equal(cfg.maxExtractedImages, 50);
   assert.throws(() => loadConfig({ ...base, MAX_MEDIA_BYTES: "8000000", MAX_SOURCE_IMAGE_BYTES: "7000000" }), /at least MAX_MEDIA_BYTES/);
   assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", MAX_SOURCE_IMAGE_BATCH_BYTES: "10000000" }), /at least MAX_SOURCE_IMAGE_BYTES/);
   assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", IMAGE_OPTIMIZE_THRESHOLD_BYTES: "30000000" }), /must not exceed MAX_SOURCE_IMAGE_BYTES/);

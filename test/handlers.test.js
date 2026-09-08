@@ -7,6 +7,7 @@ import { isAuthorized } from "../lib/auth.js";
 import { createMemoryIdempotencyStore, requestFingerprint } from "../lib/idempotency.js";
 import { createMemoryActivityStore } from "../lib/activity.js";
 import sharp from "sharp";
+import yazl from "yazl";
 
 const apiKey = "b".repeat(40);
 
@@ -53,6 +54,19 @@ async function withBridge({ cfg = baseConfig(), wordpress, idempotency, activity
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+function makeZip(entries) {
+  const zip = new yazl.ZipFile();
+  const chunks = [];
+  const result = new Promise((resolve, reject) => {
+    zip.outputStream.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    zip.outputStream.on("end", () => resolve(Buffer.concat(chunks)));
+    zip.outputStream.on("error", reject);
+  });
+  for (const [name, data] of entries) zip.addBuffer(data, name);
+  zip.end();
+  return result;
 }
 
 function unusedWordPress() {
@@ -282,6 +296,76 @@ test("GPT conversation image upload rejects arbitrary download hosts before fetc
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "untrusted_openai_file_url");
     assert.equal(downloads, 0);
+  });
+});
+
+test("GPT conversation upload extracts images from DOCX and ZIP attachments", async () => {
+  const jpeg = await sharp({ create: { width: 80, height: 60, channels: 3, background: "#336699" } }).jpeg().toBuffer();
+  const png = await sharp({ create: { width: 64, height: 48, channels: 4, background: "#aa5522ff" } }).png().toBuffer();
+  const docx = await makeZip([
+    ["[Content_Types].xml", Buffer.from("<Types/>")],
+    ["word/document.xml", Buffer.from("<w:document/>")],
+    ["word/media/photo.jpg", jpeg],
+    ["outside.png", png],
+  ]);
+  const zip = await makeZip([
+    ["photos/image.png", png],
+    ["notes.txt", Buffer.from("not an image")],
+  ]);
+  const uploaded = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpImageUpload: async (filename, mimeType, data) => {
+      uploaded.push({ filename, mimeType, data });
+      return { id: 70 + uploaded.length, media_type: "image", mime_type: mimeType, source_url: `https://example.test/${filename}` };
+    },
+  };
+  const fetchImpl = async (url) => {
+    const isDocx = String(url).includes("docx123");
+    const data = isDocx ? docx : zip;
+    const type = isDocx ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/zip";
+    return new Response(data, { status: 200, headers: { "content-type": type, "content-length": String(data.length) } });
+  };
+  const refs = [
+    { name: "article.docx", id: "file-docx123", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", download_link: "https://files.oaiusercontent.com/file-docx123?sig=1" },
+    { name: "photos.zip", id: "file-zip1234", mime_type: "application/zip", download_link: "https://files.oaiusercontent.com/file-zip1234?sig=2" },
+  ];
+
+  await withBridge({ wordpress, fetchImpl }, async (base) => {
+    const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ openaiFileIdRefs: refs, idempotency_key: "docx-zip-images-1", optimization_mode: "ask" }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(body.uploaded.length, 2);
+    assert.deepEqual(body.uploaded.map((item) => item.archive_path), ["word/media/photo.jpg", "photos/image.png"]);
+    assert.deepEqual(uploaded.map((item) => item.mimeType), ["image/jpeg", "image/png"]);
+    assert.match(uploaded[0].filename, /^article-photo\.jpg$/);
+    assert.match(uploaded[1].filename, /^photos-image\.png$/);
+  });
+});
+
+test("GPT conversation ZIP extraction rejects oversized expanded images before upload", async () => {
+  const zip = await makeZip([["photos/bomb.png", Buffer.alloc(500_001)]]);
+  let uploads = 0;
+  const wordpress = { ...unusedWordPress(), wpImageUpload: async () => { uploads += 1; } };
+  await withBridge({
+    wordpress,
+    fetchImpl: async () => new Response(zip, { status: 200, headers: { "content-type": "application/zip", "content-length": String(zip.length) } }),
+  }, async (base) => {
+    const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        openaiFileIdRefs: [{ name: "images.zip", id: "file-zipbomb1", mime_type: "application/zip", download_link: "https://files.oaiusercontent.com/file-zipbomb1?sig=1" }],
+        idempotency_key: "zip-bomb-images-1",
+      }),
+    });
+    assert.equal(response.status, 413);
+    assert.equal((await response.json()).error, "archive_image_too_large");
+    assert.equal(uploads, 0);
   });
 });
 

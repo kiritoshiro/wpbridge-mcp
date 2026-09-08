@@ -72,6 +72,8 @@ not expose revision deletion.
 - List/search image attachments in the Media Library
 - Read image metadata
 - Upload up to 10 images attached to a ChatGPT conversation through temporary OpenAI file references
+- Extract JPEG, PNG, WebP, and GIF images embedded in attached DOCX files or stored in ZIP archives
+- Bound archive entry count, extracted image count, individual size, and total expanded size
 - Recommend no-write resize/WebP optimization for large images and apply it only after approval
 - Download only `files.oaiusercontent.com` links with strict MIME, signature, source-size, and batch-size validation
 - Upload JPEG, PNG, WebP, and GIF images from caller-supplied base64 data
@@ -354,8 +356,11 @@ content; explicit user intent for the specific revision is still required.
 Custom GPT conversation attachments use the dedicated `uploadConversationImages`
 action. ChatGPT supplies temporary OpenAI file references; the bridge downloads
 only `files.oaiusercontent.com` links, validates and decodes each image, and then
-uploads it to WordPress. The original `/v1/media` base64 endpoint remains available
-for direct API clients.
+uploads it to WordPress. The action also accepts DOCX and ZIP attachments. DOCX
+processing reads supported images only from `word/media/*`; ZIP processing finds
+supported images anywhere in the archive. Archives are processed in memory with
+entry-count and expanded-size limits and are never extracted to disk. The original
+`/v1/media` base64 endpoint remains available for direct API clients.
 
 Supported types:
 

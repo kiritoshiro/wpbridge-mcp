@@ -1204,8 +1204,8 @@ paths:
       operationId: uploadConversationImages
       x-gpt-direct: true
       x-openai-isConsequential: true
-      summary: Upload conversation images to the WordPress Media Library.
-      description: 'Uploads 1-10 conversation images from temporary OpenAI file references. Large images return a no-write optimization recommendation; after user approval, retry with optimize to resize and convert to WebP. Smaller images upload unchanged. Arbitrary URLs are rejected.'
+      summary: Upload images or extract them from DOCX/ZIP files.
+      description: 'Uploads conversation images and images extracted from DOCX or ZIP attachments. Large images return a no-write optimization recommendation; after approval, retry with optimize. DOCX extraction reads only word/media. Arbitrary URLs are rejected.'
       requestBody:
         required: true
         content:
@@ -1223,7 +1223,7 @@ paths:
                   maxItems: 10
                   items:
                     type: string
-                  description: 1-10 JPEG, PNG, WebP, or GIF files from the conversation. ChatGPT populates this field with runtime file-reference objects containing name, id, mime_type, and a five-minute download_link.
+                  description: 1-10 JPEG, PNG, WebP, GIF, DOCX, or ZIP attachments. Images inside DOCX/ZIP files are extracted automatically. ChatGPT supplies runtime file-reference objects.
                 idempotency_key:
                   type: string
                   minLength: 8

@@ -103,6 +103,8 @@ MAX_SOURCE_IMAGE_BATCH_BYTES=50000000
 IMAGE_OPTIMIZE_THRESHOLD_BYTES=1500000
 IMAGE_OPTIMIZE_MAX_DIMENSION=1920
 IMAGE_OPTIMIZE_QUALITY=82
+MAX_ARCHIVE_ENTRIES=1000
+MAX_EXTRACTED_IMAGES=50
 ```
 
 Custom post types, custom fields, and custom taxonomies are disabled by default. To enable only
@@ -290,10 +292,14 @@ Block removal additionally requires the exact confirmation value
 content hash. Restoring a revision does not change status. Published-item edits, including
 revision restore, are blocked while `ALLOW_LIVE_EDITS=false`.
 
-For images attached directly to a GPT conversation, use `uploadConversationImages`.
+For images, DOCX documents, or ZIP archives attached directly to a GPT conversation,
+use `uploadConversationImages`. Images embedded in a DOCX under `word/media/*` and
+supported images stored in a ZIP are extracted automatically without writing archive
+contents to disk. Archive entry, image-count, individual-size, and total-size limits
+protect the bridge from malformed or expanding archives.
 ChatGPT supplies temporary OpenAI file references, so it does not need to place base64
 inside the action call. The bridge accepts only OpenAI's temporary file host and never
-fetches caller-chosen URLs. It supports up to 10 JPEG/PNG/WebP/GIF attachments per call.
+fetches caller-chosen URLs. It supports up to 10 source attachments per call.
 
 Use `optimization_mode=ask` first. Web-sized images upload unchanged. If an image is
 larger than the configured byte or dimension threshold, the bridge uploads nothing and
