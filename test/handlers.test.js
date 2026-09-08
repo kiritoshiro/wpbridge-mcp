@@ -273,7 +273,9 @@ test("media transform creates a rotated derivative and replays without duplicati
     path: { media_id: 44 },
     body: {
       expected_modified_gmt: source.modified_gmt,
-      rotation_degrees: 90,
+      // ChatGPT has emitted this typo despite the canonical OpenAPI field
+      // being rotation_degrees. The bridge normalizes it defensively.
+      notation_degrees: 90,
       confirm: "CREATE_TRANSFORMED_MEDIA",
       idempotency_key: "rotate-media-44-90",
     },
