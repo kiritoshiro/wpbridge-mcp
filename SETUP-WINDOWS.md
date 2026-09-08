@@ -239,7 +239,7 @@ On ChatGPT web:
 
    Enter only the raw key in the secret field. Do **not** type `Bearer ` yourself;
    ChatGPT adds the `Authorization: Bearer ...` header.
-6. Paste the entire contents of `openapi.generated.yaml` as the action schema.
+6. Paste the entire contents of `openapi.gpt.yaml` as the action schema. This generated schema exposes all capabilities through 12 grouped operations, below the editor's 30-operation limit. Restart the updated bridge before importing it. `openapi.generated.yaml` remains the full REST reference and is not the GPT import file.
 7. Test `bridgeHealth`, `listPosts`, `listPages`, `listPostBlocks`,
    `listPageRevisions`, `listMedia`, `listComments`, `getSeoCapabilities`, and `getSiteDiscovery` in Preview.
 8. Save the GPT and keep its sharing/access setting **Invite-only/private**.

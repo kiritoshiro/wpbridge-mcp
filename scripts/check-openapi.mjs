@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import assert from "node:assert/strict";
+import { parse } from "yaml";
+import { buildGptSchema } from "../lib/gpt-api.js";
 
 function normalizePath(value) {
   return value
@@ -73,5 +76,8 @@ for (const schema of ["openapi.template.yaml", "openapi.generated.yaml"]) {
 }
 
 if (!process.exitCode) {
+  const gpt = parse(fs.readFileSync("openapi.gpt.yaml", "utf8"));
+  assert.deepEqual(gpt, buildGptSchema(gpt.servers[0].url));
+  assert.ok(Object.keys(gpt.paths).length <= 30);
   console.log(`OpenAPI matches ${implemented.size} implemented method/path operations.`);
 }

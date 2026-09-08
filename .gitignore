@@ -1,5 +1,7 @@
 .env
 openapi.generated.yaml
+openapi.gpt.yaml
+node_modules/
 *.log
 
 # Runtime idempotency outcome store

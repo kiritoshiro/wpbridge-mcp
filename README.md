@@ -1,5 +1,9 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
+For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
+81 capabilities through 12 grouped operations. See [GPT API setup](GPT-API.md).
+The full REST schema is retained for direct API clients.
+
 A deliberately restricted local API bridge for controlling WordPress editorial
 content through a **private Custom GPT Action**.
 

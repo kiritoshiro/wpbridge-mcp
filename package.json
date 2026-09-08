@@ -15,5 +15,8 @@
     "test": "node --test",
     "ci": "npm run check && npm test && npm run render-openapi && npm run check:openapi",
     "check:openapi": "node scripts/check-openapi.mjs"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   }
 }

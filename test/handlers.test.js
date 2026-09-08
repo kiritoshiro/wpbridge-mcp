@@ -56,6 +56,47 @@ function unusedWordPress() {
   return { wpRequest: fail, wpSeoHelperRequest: fail, wpImageUpload: fail };
 }
 
+test("grouped API preserves auth, publish guards, and idempotency requirements", async () => {
+  await withBridge({ wordpress: unusedWordPress() }, async (base) => {
+    const call = (group, input, auth = true) => fetch(`${base}/gpt/${group}`, {
+      method: "POST", headers: { "content-type": "application/json", ...(auth ? { authorization: `Bearer ${apiKey}` } : {}) }, body: JSON.stringify(input),
+    });
+    assert.equal((await call("contentRead", { action: "bridgeHealth" }, false)).status, 401);
+    const health = await call("contentRead", { action: "bridgeHealth" });
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).ok, true);
+    assert.equal((await call("contentVisibility", { action: "publishPost", path: { post_id: 1 }, body: { confirm: "PUBLISH" } })).status, 403);
+    const create = await call("contentCreate", { action: "createDraft", body: { title: "Draft" } });
+    assert.equal(create.status, 400);
+    assert.equal((await create.json()).error, "idempotency_key_required");
+  });
+});
+
+test("grouped creation replays across direct REST calls and grouped stale edits cannot write", async () => {
+  let writes = 0;
+  const current = { id: 7, status: "draft", modified_gmt: "2026-09-08T06:30:00", title: { raw: "Draft" }, content: { raw: "Body" }, categories: [], tags: [] };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (_path, options = {}) => {
+      if (options.method === "POST") writes += 1;
+      return { data: current, headers: new Headers() };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const body = { title: "Draft", idempotency_key: "grouped-create-001" };
+    const created = await fetch(`${base}/gpt/contentCreate`, { method: "POST", headers, body: JSON.stringify({ action: "createDraft", body }) });
+    assert.equal(created.status, 201);
+    const replay = await fetch(`${base}/v1/posts`, { method: "POST", headers, body: JSON.stringify(body) });
+    assert.equal(replay.status, 201);
+    assert.equal(replay.headers.get("x-idempotency-replayed"), "true");
+    const stale = await fetch(`${base}/gpt/contentEdit`, { method: "POST", headers, body: JSON.stringify({ action: "updatePost", path: { post_id: 7 }, body: { title: "Changed", expected_modified_gmt: "2020-01-01T00:00:00" } }) });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).error, "edit_conflict");
+    assert.equal(writes, 1);
+  });
+});
+
 test("health is public but editorial endpoints require bridge authentication", async () => {
   await withBridge({ wordpress: unusedWordPress() }, async (base) => {
     const health = await fetch(`${base}/health`);

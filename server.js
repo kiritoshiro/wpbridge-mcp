@@ -50,13 +50,14 @@ const server = http.createServer(async (req, res) => {
     }
   } finally {
     const requestId = String(res.getHeader("x-request-id") || "");
-    const inferred = inferMutationActivity(req.method, pathname);
+    const effective = req.bridgeTarget || { method: req.method, path: pathname };
+    const inferred = inferMutationActivity(effective.method, effective.path);
     if (requestId && inferred) {
       try {
         activity.upsertByRequestId(requestId, {
           time: new Date(started).toISOString(),
-          method: req.method,
-          path: pathname,
+          method: effective.method,
+          path: effective.path,
           status: res.statusCode,
           outcome:
             String(res.getHeader("x-wpbridge-outcome") || res.getHeader("x-idempotency-state") || "") === "unknown"

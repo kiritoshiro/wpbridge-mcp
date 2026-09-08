@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { stringify } from "yaml";
+import { buildGptSchema } from "../lib/gpt-api.js";
 
 function loadEnvFile(file = ".env") {
   const full = path.resolve(process.cwd(), file);
@@ -25,3 +27,5 @@ if (!/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?$/.test(base)) {
 const template = fs.readFileSync("openapi.template.yaml", "utf8");
 fs.writeFileSync("openapi.generated.yaml", template.replaceAll("__PUBLIC_BASE_URL__", base));
 console.log(`Created openapi.generated.yaml for ${base}`);
+fs.writeFileSync("openapi.gpt.yaml", stringify(buildGptSchema(base), { aliasDuplicateObjects: false }));
+console.log(`Created openapi.gpt.yaml with 12 operations for ${base}`);

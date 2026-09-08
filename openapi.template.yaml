@@ -2140,8 +2140,6 @@ paths:
           description: The supplied edit version/fingerprint is stale.
         '400':
           description: No supported field supplied or field unsupported by the post type.
-        '403':
-          description: The requested post type is not allowlisted.
   /v1/custom-types/{post_type}/items/{object_id}/preview:
     post:
       operationId: previewCustomItemEdit

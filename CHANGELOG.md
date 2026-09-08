@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add 12 authenticated GPT groups covering all 81 original actions with typed action-specific envelopes and a fixed dispatch allowlist.
+- Generate openapi.gpt.yaml for the 30-operation editor limit; keep the full REST API intact. Preserve original handler guards, idempotency and activity targets.
+- Add grouped coverage, rejection, auth, publishing, stale-edit and cross-interface retry tests, and CI validation of the generated schema.
+- Fix duplicate custom-edit response keys discovered by strict YAML parsing.
+
 ## 1.15.1
 
 - Preserve unknown write outcomes when response bodies disconnect, time out, or contain invalid JSON; add regression tests for core, SEO, and media requests.
