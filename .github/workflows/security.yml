@@ -1,0 +1,60 @@
+name: Security and workflow checks
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Secrets and workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download and verify scanners
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCANNER_DIR: ${{ runner.temp }}/bridge-scanners
+        run: |
+          mkdir -p "$SCANNER_DIR"
+          cd "$SCANNER_DIR"
+          gh release download v8.30.1 --repo gitleaks/gitleaks --pattern 'gitleaks_8.30.1_linux_x64.tar.gz' --pattern 'gitleaks_8.30.1_checksums.txt'
+          grep ' gitleaks_8.30.1_linux_x64.tar.gz$' gitleaks_8.30.1_checksums.txt | sha256sum --check --strict
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          gh release download v1.7.12 --repo rhysd/actionlint --pattern 'actionlint_1.7.12_linux_amd64.tar.gz' --pattern 'actionlint_1.7.12_checksums.txt'
+          grep ' actionlint_1.7.12_linux_amd64.tar.gz$' actionlint_1.7.12_checksums.txt | sha256sum --check --strict
+          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          echo "$SCANNER_DIR" >> "$GITHUB_PATH"
+      - name: Scan Git history for credentials
+        run: gitleaks git --redact --no-banner .
+      - name: Validate workflow syntax, expressions, and shell scripts
+        if: ${{ !cancelled() }}
+        run: actionlint -color
+
+  audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=moderate
