@@ -47,11 +47,12 @@ Install Node.js 20 or newer. Then open PowerShell in this extracted folder:
 
 ```powershell
 node --version
+npm install
 npm run check
 ```
 
-The bridge itself has **zero npm runtime dependencies**, so there is no
-`npm install` step.
+`npm install` installs the YAML parser and the image-processing dependency used
+for approved resize/WebP conversion of large conversation attachments.
 
 ## 4) Create `.env`
 
@@ -97,6 +98,11 @@ ALLOW_EXTERNAL_ACCESS=false
 TRUSTED_PROXY_IPS=
 MAX_BODY_BYTES=12000000
 MAX_MEDIA_BYTES=8000000
+MAX_SOURCE_IMAGE_BYTES=20000000
+MAX_SOURCE_IMAGE_BATCH_BYTES=50000000
+IMAGE_OPTIMIZE_THRESHOLD_BYTES=1500000
+IMAGE_OPTIMIZE_MAX_DIMENSION=1920
+IMAGE_OPTIMIZE_QUALITY=82
 ```
 
 Custom post types, custom fields, and custom taxonomies are disabled by default. To enable only
@@ -284,9 +290,20 @@ Block removal additionally requires the exact confirmation value
 content hash. Restoring a revision does not change status. Published-item edits, including
 revision restore, are blocked while `ALLOW_LIVE_EDITS=false`.
 
-For an image upload, the `uploadMedia` action accepts JPEG/PNG/WebP/GIF image
-bytes encoded as raw base64 plus a filename and MIME type. The default decoded
-image size limit is 8 MB. After upload, use the returned media ID to set
+For images attached directly to a GPT conversation, use `uploadConversationImages`.
+ChatGPT supplies temporary OpenAI file references, so it does not need to place base64
+inside the action call. The bridge accepts only OpenAI's temporary file host and never
+fetches caller-chosen URLs. It supports up to 10 JPEG/PNG/WebP/GIF attachments per call.
+
+Use `optimization_mode=ask` first. Web-sized images upload unchanged. If an image is
+larger than the configured byte or dimension threshold, the bridge uploads nothing and
+returns `image_optimization_recommended`; ask the user before retrying with
+`optimization_mode=optimize` and a fresh idempotency key. Approved JPEG/PNG/WebP images
+are resized within the configured maximum dimension and converted to WebP. GIFs are not
+automatically optimized because conversion could remove animation.
+
+The older `uploadMedia` action remains available for callers that already have genuine
+raw base64 bytes. The default final image size limit is 8 MB. After upload, use the returned media ID to set
 `featured_media` on a post/page, or use the returned `source_url` when
 intentionally inserting the image into content.
 

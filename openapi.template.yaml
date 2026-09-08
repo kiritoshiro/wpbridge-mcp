@@ -1199,6 +1199,54 @@ paths:
           description: Revision restored without changing page publication status.
         '409':
           description: Current content changed since it was read.
+  /v1/media/from-chatgpt:
+    post:
+      operationId: uploadConversationImages
+      x-gpt-direct: true
+      x-openai-isConsequential: true
+      summary: Upload conversation images to the WordPress Media Library.
+      description: 'Uploads 1-10 images attached to the current ChatGPT conversation using OpenAI temporary file references. The bridge accepts only HTTPS files.oaiusercontent.com links, validates image signatures and size limits, and never fetches arbitrary URLs. With optimization_mode=ask, large or oversized images are not uploaded; the response recommends resize/WebP conversion so the assistant can obtain user approval. After approval, use optimization_mode=optimize and a fresh idempotency key. Smaller images upload unchanged. GIF optimization is not automatic because it could discard animation.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - openaiFileIdRefs
+              - idempotency_key
+              properties:
+                openaiFileIdRefs:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items:
+                    type: string
+                  description: 1-10 JPEG, PNG, WebP, or GIF files from the conversation. ChatGPT populates this field with runtime file-reference objects containing name, id, mime_type, and a five-minute download_link.
+                idempotency_key:
+                  type: string
+                  minLength: 8
+                  maxLength: 200
+                  pattern: ^[A-Za-z0-9._:-]+$
+                  description: Fresh unique key for this logical batch. Reuse only for an identical retry. After accepting an optimization recommendation, use a fresh key for the changed optimize request.
+                optimization_mode:
+                  type: string
+                  enum:
+                  - ask
+                  - optimize
+                  - original
+                  default: ask
+                  description: Use ask by default. It uploads ordinary web-sized files but returns a no-write recommendation for large images. Use optimize only after user approval to resize and convert recommended JPEG/PNG/WebP images to WebP. Use original only when explicitly requested.
+      responses:
+        '201':
+          description: Every image uploaded successfully.
+        '207':
+          description: Some images uploaded while other independent uploads failed or have unknown outcomes.
+        '409':
+          description: No images uploaded because optimization is recommended, or the idempotency key conflicts.
+        '413':
+          description: A source, batch, or prepared image exceeds a configured byte limit.
   /v1/media:
     get:
       operationId: listMedia

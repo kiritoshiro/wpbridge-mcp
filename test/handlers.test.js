@@ -6,6 +6,7 @@ import { writeBridgeError } from "../lib/http.js";
 import { isAuthorized } from "../lib/auth.js";
 import { createMemoryIdempotencyStore, requestFingerprint } from "../lib/idempotency.js";
 import { createMemoryActivityStore } from "../lib/activity.js";
+import sharp from "sharp";
 
 const apiKey = "b".repeat(40);
 
@@ -16,6 +17,11 @@ function baseConfig(overrides = {}) {
     allowLiveEdits: false,
     maxBodyBytes: 1_000_000,
     maxMediaBytes: 100_000,
+    maxSourceImageBytes: 500_000,
+    maxSourceImageBatchBytes: 1_000_000,
+    imageOptimizeThresholdBytes: 50_000,
+    imageOptimizeMaxDimension: 600,
+    imageOptimizeQuality: 82,
     bridgeApiKey: apiKey,
     customPostTypes: [],
     customFieldAllowlist: new Map(),
@@ -27,12 +33,12 @@ function baseConfig(overrides = {}) {
   };
 }
 
-async function withBridge({ cfg = baseConfig(), wordpress, idempotency, activity }, fn) {
+async function withBridge({ cfg = baseConfig(), wordpress, idempotency, activity, fetchImpl }, fn) {
   const security = {
     authorized: (req) => isAuthorized(req, apiKey),
     rateLimited: () => false,
   };
-  const route = createRouteHandler({ cfg, wordpress, security, idempotency, activity });
+  const route = createRouteHandler({ cfg, wordpress, security, idempotency, activity, fetchImpl });
   const server = http.createServer(async (req, res) => {
     try {
       await route(req, res);
@@ -205,6 +211,77 @@ test("media endpoint rejects unsupported uploads before calling WordPress", asyn
     });
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "unsupported_mime_type");
+  });
+});
+
+test("GPT conversation images require optimization approval, then resize to WebP and replay safely", async () => {
+  const source = await sharp({ create: { width: 1200, height: 800, channels: 3, background: "#cc8844" } }).jpeg({ quality: 90 }).toBuffer();
+  let downloads = 0;
+  let uploads = 0;
+  let captured;
+  const fetchImpl = async (url, options) => {
+    downloads += 1;
+    assert.equal(new URL(url).hostname, "files.oaiusercontent.com");
+    assert.equal(options.redirect, "error");
+    return new Response(source, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(source.length) } });
+  };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpImageUpload: async (filename, mimeType, data) => {
+      uploads += 1;
+      captured = { filename, mimeType, data };
+      const metadata = await sharp(data).metadata();
+      return { id: 55, media_type: "image", mime_type: mimeType, source_url: "https://example.test/image.webp", media_details: { width: metadata.width, height: metadata.height, filesize: data.length } };
+    },
+  };
+  const file = { name: "Large Photo.jpg", id: "file-image123", mime_type: "image/jpeg", download_link: "https://files.oaiusercontent.com/file-image123?sig=first" };
+  const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+
+  await withBridge({ wordpress, fetchImpl }, async (base) => {
+    const suggested = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST", headers,
+      body: JSON.stringify({ openaiFileIdRefs: [file], idempotency_key: "conversation-image-ask-1", optimization_mode: "ask" }),
+    });
+    const suggestion = await suggested.json();
+    assert.equal(suggested.status, 409);
+    assert.equal(suggestion.error, "image_optimization_recommended");
+    assert.equal(suggestion.recommendations[0].suggested_format, "image/webp");
+    assert.equal(uploads, 0);
+
+    const optimizedBody = { openaiFileIdRefs: [file], idempotency_key: "conversation-image-optimize-1", optimization_mode: "optimize" };
+    const optimized = await fetch(`${base}/gpt/uploadConversationImages`, { method: "POST", headers, body: JSON.stringify(optimizedBody) });
+    const result = await optimized.json();
+    assert.equal(optimized.status, 201);
+    assert.equal(result.uploaded[0].optimized, true);
+    assert.equal(captured.mimeType, "image/webp");
+    assert.match(captured.filename, /\.webp$/);
+    const output = await sharp(captured.data).metadata();
+    assert.ok(output.width <= 600 && output.height <= 600);
+    assert.equal(uploads, 1);
+
+    const replayBody = { ...optimizedBody, openaiFileIdRefs: [{ ...file, download_link: "https://files.oaiusercontent.com/file-image123?sig=renewed" }] };
+    const replay = await fetch(`${base}/gpt/uploadConversationImages`, { method: "POST", headers, body: JSON.stringify(replayBody) });
+    assert.equal(replay.status, 201);
+    assert.equal(replay.headers.get("x-idempotency-replayed"), "true");
+    assert.equal(downloads, 2);
+    assert.equal(uploads, 1);
+  });
+});
+
+test("GPT conversation image upload rejects arbitrary download hosts before fetching", async () => {
+  let downloads = 0;
+  await withBridge({ wordpress: unusedWordPress(), fetchImpl: async () => { downloads += 1; } }, async (base) => {
+    const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        openaiFileIdRefs: [{ name: "image.jpg", id: "file-image123", mime_type: "image/jpeg", download_link: "https://example.com/private.jpg" }],
+        idempotency_key: "conversation-image-evil-1",
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "untrusted_openai_file_url");
+    assert.equal(downloads, 0);
   });
 });
 

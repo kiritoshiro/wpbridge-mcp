@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add native Custom GPT conversation-image uploads through `openaiFileIdRefs`, restricted temporary OpenAI downloads, bounded batches, pre-upload optimization recommendations, and approval-driven resize/WebP conversion.
 - Make the grouped GPT schema importer-compatible by declaring every request body and nested object with explicit properties and emitting an explicit `components.schemas` object.
 - Condense Custom GPT instructions below the editor's 8,000-character limit and enforce the limit in CI while retaining grouped-tool, edit-preview, publication, retry, recovery, and safety guidance.
 - Add 12 authenticated GPT groups covering all 81 original actions with typed action-specific envelopes and a fixed dispatch allowlist.

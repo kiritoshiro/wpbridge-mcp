@@ -18,6 +18,7 @@
     "check:openapi": "node scripts/check-openapi.mjs"
   },
   "dependencies": {
+    "sharp": "0.35.4",
     "yaml": "2.9.0"
   }
 }

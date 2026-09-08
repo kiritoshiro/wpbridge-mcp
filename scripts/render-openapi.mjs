@@ -28,4 +28,4 @@ const template = fs.readFileSync("openapi.template.yaml", "utf8");
 fs.writeFileSync("openapi.generated.yaml", template.replaceAll("__PUBLIC_BASE_URL__", base));
 console.log(`Created openapi.generated.yaml for ${base}`);
 fs.writeFileSync("openapi.gpt.yaml", stringify(buildGptSchema(base), { aliasDuplicateObjects: false }));
-console.log(`Created openapi.gpt.yaml with 12 operations for ${base}`);
+console.log(`Created openapi.gpt.yaml with 13 operations for ${base}`);

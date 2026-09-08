@@ -89,6 +89,32 @@ test("activity history configuration is strictly validated", () => {
   assert.throws(() => loadConfig({ ...base, ACTIVITY_STORE_PATH: "   " }), /ACTIVITY_STORE_PATH must not be empty/);
 });
 
+test("conversation image limits and optimization settings are bounded and consistent", () => {
+  const base = {
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  };
+  const cfg = loadConfig({
+    ...base,
+    MAX_MEDIA_BYTES: "8000000",
+    MAX_SOURCE_IMAGE_BYTES: "20000000",
+    MAX_SOURCE_IMAGE_BATCH_BYTES: "50000000",
+    IMAGE_OPTIMIZE_THRESHOLD_BYTES: "1500000",
+    IMAGE_OPTIMIZE_MAX_DIMENSION: "1920",
+    IMAGE_OPTIMIZE_QUALITY: "82",
+  });
+  assert.equal(cfg.maxSourceImageBytes, 20_000_000);
+  assert.equal(cfg.maxSourceImageBatchBytes, 50_000_000);
+  assert.equal(cfg.imageOptimizeThresholdBytes, 1_500_000);
+  assert.equal(cfg.imageOptimizeMaxDimension, 1920);
+  assert.equal(cfg.imageOptimizeQuality, 82);
+  assert.throws(() => loadConfig({ ...base, MAX_MEDIA_BYTES: "8000000", MAX_SOURCE_IMAGE_BYTES: "7000000" }), /at least MAX_MEDIA_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", MAX_SOURCE_IMAGE_BATCH_BYTES: "10000000" }), /at least MAX_SOURCE_IMAGE_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", IMAGE_OPTIMIZE_THRESHOLD_BYTES: "30000000" }), /must not exceed MAX_SOURCE_IMAGE_BYTES/);
+});
+
 
 test("default author accepts a positive user ID or exact name/slug", () => {
   assert.deepEqual(parseDefaultAuthor("42"), { kind: "id", value: 42, raw: "42" });

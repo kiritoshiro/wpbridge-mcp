@@ -1,7 +1,8 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-81 capabilities through 12 grouped operations. See [GPT API setup](GPT-API.md).
+81 existing editorial capabilities through 12 grouped operations plus one direct
+conversation-image uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
 A deliberately restricted local API bridge for controlling WordPress editorial
@@ -70,11 +71,14 @@ not expose revision deletion.
 ### Image media
 - List/search image attachments in the Media Library
 - Read image metadata
+- Upload up to 10 images attached to a ChatGPT conversation through temporary OpenAI file references
+- Recommend no-write resize/WebP optimization for large images and apply it only after approval
+- Download only `files.oaiusercontent.com` links with strict MIME, signature, source-size, and batch-size validation
 - Upload JPEG, PNG, WebP, and GIF images from caller-supplied base64 data
 - Require an idempotency key for uploads so exact retries cannot create duplicate attachments
 - Edit title, alt text, caption, description, and attachment parent
 - Use returned media IDs as featured images on posts/pages
-- No remote-URL fetching
+- No arbitrary remote-URL fetching
 
 ### Editorial audits / workflow queue
 - Inspect one post/page/allowlisted custom item with `getEditorialStatus`
@@ -306,7 +310,7 @@ v1.12.0+ separates the bridge runtime into independently testable modules:
 Run `npm run check` for syntax validation, `npm test` for the automated suite,
 and `npm run check:openapi` after rendering the schema. The OpenAPI check compares
 the documented method/path set with all annotated implemented handlers and currently
-verifies all 81 operations. CI performs syntax checks, tests, schema rendering, and
+verifies all 82 operations. CI performs syntax checks, tests, schema rendering, and
 the implementation/schema comparison on pushes and pull requests.
 
 WordPress transport failures are normalized. Read-only network failures return `502 wordpress_unreachable` and read-only upstream deadlines return `504 wordpress_timeout`. For mutating requests, a network loss or timeout after the request may have been sent is reported separately as an **unknown write outcome** (`wordpress_write_network_outcome_unknown` / `wordpress_write_timeout_outcome_unknown`) so callers do not mistake it for a definite failure and retry blindly. Raw network exception details are not returned to callers.
@@ -347,9 +351,11 @@ content; explicit user intent for the specific revision is still required.
 
 ## Media upload safety
 
-Image uploads are sent to `/v1/media` as JSON containing raw base64 image
-data. The bridge validates the declared MIME type and basic file signature
-before sending the bytes to WordPress.
+Custom GPT conversation attachments use the dedicated `uploadConversationImages`
+action. ChatGPT supplies temporary OpenAI file references; the bridge downloads
+only `files.oaiusercontent.com` links, validates and decodes each image, and then
+uploads it to WordPress. The original `/v1/media` base64 endpoint remains available
+for direct API clients.
 
 Supported types:
 
@@ -358,11 +364,16 @@ Supported types:
 - `image/webp`
 - `image/gif`
 
-The default decoded image limit is 8 MB (`MAX_MEDIA_BYTES=8000000`). Because
-base64 expands data, the default request-body limit is 12 MB
-(`MAX_BODY_BYTES=12000000`).
+For a large image, the default `optimization_mode=ask` returns a recommendation
+without uploading anything. After the user approves, retrying with
+`optimization_mode=optimize` resizes within the configured maximum dimension and
+converts JPEG, PNG, or WebP to WebP. Automatic GIF conversion is intentionally
+disabled to avoid discarding animation. The final decoded image limit is 8 MB
+(`MAX_MEDIA_BYTES=8000000`).
 
-The bridge never downloads an image from a user-supplied URL. Uploads also require an idempotency key so a retry after an ambiguous connection failure cannot silently create a second attachment.
+The bridge never downloads an arbitrary user-supplied URL. Uploads also require
+an idempotency key so a retry after an ambiguous connection failure cannot silently
+create a second attachment.
 
 ## SEO safety model
 

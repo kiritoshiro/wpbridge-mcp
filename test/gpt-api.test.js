@@ -23,10 +23,10 @@ function assertObjectSchemasHaveProperties(value, context = "schema") {
   for (const [key, child] of Object.entries(value)) assertObjectSchemasHaveProperties(child, `${context}.${key}`);
 }
 
-test("GPT schema has 12 operations covering all 81 capabilities exactly once with importer-compatible body schemas", () => {
+test("GPT schema has 12 grouped operations plus direct conversation-file upload", () => {
   const schema = buildGptSchema("https://example.test");
-  assert.equal(Object.keys(schema.paths).length, 12);
-  assert.equal(operations.size, 81);
+  assert.equal(Object.keys(schema.paths).length, 13);
+  assert.equal(operations.size, 82);
   assert.deepEqual(schema.components.schemas, {});
   const actions = [];
   for (const [group, ids] of Object.entries(groups)) {
@@ -45,7 +45,25 @@ test("GPT schema has 12 operations covering all 81 capabilities exactly once wit
       assert.deepEqual(variant.properties.body, addMissingObjectProperties(operations.get(id).spec.requestBody?.content?.["application/json"]?.schema));
     }
   }
-  assert.deepEqual(actions.sort(), [...operations.keys()].sort());
+  const groupedIds = [...operations].filter(([, operation]) => !operation.spec["x-gpt-direct"]).map(([id]) => id);
+  assert.deepEqual(actions.sort(), groupedIds.sort());
+  const direct = schema.paths["/gpt/uploadConversationImages"].post;
+  assert.equal(direct.operationId, "uploadConversationImages");
+  assert.equal(direct.requestBody.content["application/json"].schema.properties.openaiFileIdRefs.items.type, "string");
+  assertObjectSchemasHaveProperties(direct.requestBody.content["application/json"].schema, "uploadConversationImages");
+});
+
+test("direct conversation-file action maps only to the fixed attachment upload route", async () => {
+  const original = request("uploadConversationImages", { openaiFileIdRefs: [], idempotency_key: "image-upload-1" });
+  original.url = "/gpt/uploadConversationImages";
+  const mapped = await translateGptRequest(original, 100000);
+  assert.equal(mapped.method, "POST");
+  assert.equal(mapped.url, "/v1/media/from-chatgpt");
+  const chunks = [];
+  for await (const chunk of mapped) chunks.push(chunk);
+  assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString("utf8")), {
+    openaiFileIdRefs: [], idempotency_key: "image-upload-1",
+  });
 });
 
 test("every allowlisted action translates to its original method and route", async () => {
