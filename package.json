@@ -13,7 +13,8 @@
     "generate-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "render-openapi": "node scripts/render-openapi.mjs",
     "test": "node --test",
-    "ci": "npm run check && npm test && npm run render-openapi && npm run check:openapi",
+    "ci": "npm run check && npm run check:instructions && npm test && npm run render-openapi && npm run check:openapi",
+    "check:instructions": "node scripts/check-instructions.mjs",
     "check:openapi": "node scripts/check-openapi.mjs"
   },
   "dependencies": {
