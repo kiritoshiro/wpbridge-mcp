@@ -1,3 +1,6 @@
 .env
 openapi.generated.yaml
 *.log
+
+# Runtime idempotency outcome store
+.data/

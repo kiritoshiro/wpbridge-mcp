@@ -3,7 +3,7 @@ import path from "node:path";
 
 function loadEnvFile(file = ".env") {
   const full = path.resolve(process.cwd(), file);
-  if (!fs.existsSync(full)) throw new Error(".env not found.");
+  if (!fs.existsSync(full)) return;
   for (const rawLine of fs.readFileSync(full, "utf8").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;

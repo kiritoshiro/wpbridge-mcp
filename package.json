@@ -1,16 +1,19 @@
 {
   "name": "site-one-wordpress-chatgpt-bridge",
-  "version": "1.0.2",
+  "version": "1.15.1",
   "private": true,
   "type": "module",
-  "description": "Restricted local bridge between a private ChatGPT GPT Action and WordPress REST API.",
+  "description": "Restricted local bridge between a private ChatGPT GPT Action and WordPress REST API, with posts, pages, version-bound edit previews, media, Gutenberg/revisions, workflow, taxonomy, comments, discovery, SEO, allowlisted custom content/taxonomies, privacy-filtered authors, persistent idempotent retry protection, deadline-bounded editorial audits, resumable capped bulk editorial metadata edits, and privacy-filtered activity history with preview- and conflict-guarded recovery, plus optional enforced default authorship for newly created content.",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js",
+    "check": "node scripts/check-syntax.mjs",
     "generate-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
-    "render-openapi": "node scripts/render-openapi.mjs"
+    "render-openapi": "node scripts/render-openapi.mjs",
+    "test": "node --test",
+    "ci": "npm run check && npm test && npm run render-openapi && npm run check:openapi",
+    "check:openapi": "node scripts/check-openapi.mjs"
   }
 }

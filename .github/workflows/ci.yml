@@ -1,0 +1,43 @@
+name: Bridge checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22, 24]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      PUBLIC_BASE_URL: https://example.test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Syntax validation
+        run: npm run check
+      - name: Automated tests
+        run: npm test
+      - name: Render and verify OpenAPI schema
+        run: npm run render-openapi && npm run check:openapi
+        shell: bash
+
+  php:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate WordPress helper syntax
+        run: php -l wordpress/wpbridge-seo-helper/wpbridge-seo-helper.php
