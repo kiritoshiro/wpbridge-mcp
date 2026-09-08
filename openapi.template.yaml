@@ -1205,7 +1205,7 @@ paths:
       x-gpt-direct: true
       x-openai-isConsequential: true
       summary: Upload images or extract them from DOCX/ZIP files.
-      description: 'Uploads conversation images and images extracted from DOCX or ZIP attachments. Large images return a no-write optimization recommendation; after approval, retry with optimize. DOCX extraction reads only word/media. Arbitrary URLs are rejected.'
+      description: 'Uploads images or extracts them from an original DOCX/ZIP attachment. Pass the original file, not Code Interpreter output or sandbox links. Large images return a no-write optimization recommendation. Arbitrary URLs are rejected.'
       requestBody:
         required: true
         content:
@@ -1223,7 +1223,7 @@ paths:
                   maxItems: 10
                   items:
                     type: string
-                  description: 1-10 JPEG, PNG, WebP, GIF, DOCX, or ZIP attachments. Images inside DOCX/ZIP files are extracted automatically. ChatGPT supplies runtime file-reference objects.
+                  description: 1-10 original JPEG, PNG, WebP, GIF, DOCX, or ZIP conversation attachments. Pass original DOCX/ZIP files directly; do not pass Code Interpreter sandbox outputs.
                 idempotency_key:
                   type: string
                   minLength: 8

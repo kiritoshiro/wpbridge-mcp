@@ -355,12 +355,16 @@ content; explicit user intent for the specific revision is still required.
 
 Custom GPT conversation attachments use the dedicated `uploadConversationImages`
 action. ChatGPT supplies temporary OpenAI file references; the bridge downloads
-only `files.oaiusercontent.com` links, validates and decodes each image, and then
+only the `files.oaiusercontent.com` host family, validates and decodes each image, and then
 uploads it to WordPress. The action also accepts DOCX and ZIP attachments. DOCX
 processing reads supported images only from `word/media/*`; ZIP processing finds
 supported images anywhere in the archive. Archives are processed in memory with
 entry-count and expanded-size limits and are never extracted to disk. The original
 `/v1/media` base64 endpoint remains available for direct API clients.
+
+Pass the original conversation attachment to the action. A `sandbox:/mnt/data/...`
+reference created by Code Interpreter exists only inside ChatGPT's sandbox and is
+not downloadable by WPBridge; the bridge returns a specific error for this case.
 
 Supported types:
 

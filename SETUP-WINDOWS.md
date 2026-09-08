@@ -297,6 +297,9 @@ use `uploadConversationImages`. Images embedded in a DOCX under `word/media/*` a
 supported images stored in a ZIP are extracted automatically without writing archive
 contents to disk. Archive entry, image-count, individual-size, and total-size limits
 protect the bridge from malformed or expanding archives.
+Pass the original attachment directly. Do not first extract it with Code Interpreter:
+its `sandbox:/mnt/data/...` references are private to ChatGPT and cannot be downloaded
+by the external bridge.
 ChatGPT supplies temporary OpenAI file references, so it does not need to place base64
 inside the action call. The bridge accepts only OpenAI's temporary file host and never
 fetches caller-chosen URLs. It supports up to 10 source attachments per call.

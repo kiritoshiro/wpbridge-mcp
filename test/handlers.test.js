@@ -235,7 +235,7 @@ test("GPT conversation images require optimization approval, then resize to WebP
   let captured;
   const fetchImpl = async (url, options) => {
     downloads += 1;
-    assert.equal(new URL(url).hostname, "files.oaiusercontent.com");
+    assert.equal(new URL(url).hostname, "download.files.oaiusercontent.com");
     assert.equal(options.redirect, "error");
     return new Response(source, { status: 200, headers: { "content-type": "image/jpeg", "content-length": String(source.length) } });
   };
@@ -248,7 +248,7 @@ test("GPT conversation images require optimization approval, then resize to WebP
       return { id: 55, media_type: "image", mime_type: mimeType, source_url: "https://example.test/image.webp", media_details: { width: metadata.width, height: metadata.height, filesize: data.length } };
     },
   };
-  const file = { name: "Large Photo.jpg", id: "file_image123", mime_type: "image/jpeg", download_link: "https://files.oaiusercontent.com/file_image123?sig=first" };
+  const file = { name: "Large Photo.jpg", id: "file_image123", mime_type: "image/jpeg", download_link: "https://download.files.oaiusercontent.com/file_image123?sig=first" };
   const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
 
   await withBridge({ wordpress, fetchImpl }, async (base) => {
@@ -273,7 +273,7 @@ test("GPT conversation images require optimization approval, then resize to WebP
     assert.ok(output.width <= 600 && output.height <= 600);
     assert.equal(uploads, 1);
 
-    const replayBody = { ...optimizedBody, openaiFileIdRefs: [{ ...file, download_link: "https://files.oaiusercontent.com/file_image123?sig=renewed" }] };
+    const replayBody = { ...optimizedBody, openaiFileIdRefs: [{ ...file, download_link: "https://download.files.oaiusercontent.com/file_image123?sig=renewed" }] };
     const replay = await fetch(`${base}/gpt/uploadConversationImages`, { method: "POST", headers, body: JSON.stringify(replayBody) });
     assert.equal(replay.status, 201);
     assert.equal(replay.headers.get("x-idempotency-replayed"), "true");
@@ -295,6 +295,25 @@ test("GPT conversation image upload rejects arbitrary download hosts before fetc
     });
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "untrusted_openai_file_url");
+    assert.equal(downloads, 0);
+  });
+});
+
+test("GPT conversation upload explains that sandbox files must be replaced by original attachments", async () => {
+  let downloads = 0;
+  await withBridge({ wordpress: unusedWordPress(), fetchImpl: async () => { downloads += 1; } }, async (base) => {
+    const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        openaiFileIdRefs: [{ name: "photo.jpg", id: "sandbox-image-1", mime_type: "image/jpeg", download_link: "sandbox:/mnt/data/photo.jpg" }],
+        idempotency_key: "conversation-image-sandbox-1",
+      }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.error, "non_downloadable_sandbox_file");
+    assert.match(body.message, /original attached image, DOCX, or ZIP/i);
     assert.equal(downloads, 0);
   });
 });
