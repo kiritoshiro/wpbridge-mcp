@@ -9,7 +9,21 @@ function request(group, input) {
   });
 }
 
-test("GPT schema has 12 operations covering all 81 capabilities exactly once with original body schemas", () => {
+function addMissingObjectProperties(value) {
+  if (Array.isArray(value)) return value.map(addMissingObjectProperties);
+  if (!value || typeof value !== "object") return value;
+  const copy = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, addMissingObjectProperties(child)]));
+  if (copy.type === "object" && !Object.hasOwn(copy, "properties")) copy.properties = {};
+  return copy;
+}
+
+function assertObjectSchemasHaveProperties(value, context = "schema") {
+  if (!value || typeof value !== "object") return;
+  if (value.type === "object") assert.ok(value.properties && typeof value.properties === "object", `${context} is missing properties`);
+  for (const [key, child] of Object.entries(value)) assertObjectSchemasHaveProperties(child, `${context}.${key}`);
+}
+
+test("GPT schema has 12 operations covering all 81 capabilities exactly once with importer-compatible body schemas", () => {
   const schema = buildGptSchema("https://example.test");
   assert.equal(Object.keys(schema.paths).length, 12);
   assert.equal(operations.size, 81);
@@ -19,12 +33,16 @@ test("GPT schema has 12 operations covering all 81 capabilities exactly once wit
     const op = schema.paths[`/gpt/${group}`].post;
     const requestSchema = op.requestBody.content["application/json"].schema;
     assert.equal(requestSchema.type, "object");
+    assert.ok(requestSchema.properties && typeof requestSchema.properties === "object");
+    assert.deepEqual(requestSchema.properties.action.enum, ids);
+    assert.deepEqual(requestSchema.required, ["action"]);
+    assertObjectSchemasHaveProperties(requestSchema, group);
     assert.ok(Array.isArray(requestSchema.oneOf));
     assert.equal(op["x-openai-isConsequential"], ids.some((id) => operations.get(id).method !== "GET"));
     for (const variant of requestSchema.oneOf) {
       const id = variant.properties.action.enum[0];
       actions.push(id);
-      assert.deepEqual(variant.properties.body, operations.get(id).spec.requestBody?.content?.["application/json"]?.schema);
+      assert.deepEqual(variant.properties.body, addMissingObjectProperties(operations.get(id).spec.requestBody?.content?.["application/json"]?.schema));
     }
   }
   assert.deepEqual(actions.sort(), [...operations.keys()].sort());
