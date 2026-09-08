@@ -75,7 +75,7 @@ not expose revision deletion.
 - Extract JPEG, PNG, WebP, and GIF images embedded in attached DOCX files or stored in ZIP archives
 - Bound archive entry count, extracted image count, individual size, and total expanded size
 - Recommend no-write resize/WebP optimization for large images and apply it only after approval
-- Download only `files.oaiusercontent.com` links with strict MIME, signature, source-size, and batch-size validation
+- Download only OpenAI's `oaiusercontent.com` host family with strict MIME, signature, source-size, and batch-size validation
 - Upload JPEG, PNG, WebP, and GIF images from caller-supplied base64 data
 - Require an idempotency key for uploads so exact retries cannot create duplicate attachments
 - Edit title, alt text, caption, description, and attachment parent
@@ -355,7 +355,7 @@ content; explicit user intent for the specific revision is still required.
 
 Custom GPT conversation attachments use the dedicated `uploadConversationImages`
 action. ChatGPT supplies temporary OpenAI file references; the bridge downloads
-only the `files.oaiusercontent.com` host family, validates and decodes each image, and then
+only OpenAI's `oaiusercontent.com` host family, validates and decodes each image, and then
 uploads it to WordPress. The action also accepts DOCX and ZIP attachments. DOCX
 processing reads supported images only from `word/media/*`; ZIP processing finds
 supported images anywhere in the archive. Archives are processed in memory with

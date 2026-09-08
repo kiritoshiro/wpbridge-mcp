@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Accept regional OpenAI Actions download hosts under the controlled `*.oaiusercontent.com` domain while continuing to reject other and suffix-spoofed domains.
 - Diagnose non-downloadable ChatGPT sandbox references clearly, accept subdomains of the documented temporary file host, and direct the GPT to pass original DOCX/ZIP attachments instead of Code Interpreter outputs.
 - Accept OpenAI attachment IDs as bounded opaque strings instead of assuming a `file-` prefix that the Actions runtime does not guarantee.
 - Extract supported images from attached DOCX and ZIP files through the conversation-image action, with strict archive entry, expanded-size, image-count, signature, and decode limits.
