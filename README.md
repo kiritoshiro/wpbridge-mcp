@@ -1,7 +1,7 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-81 existing editorial capabilities through 12 grouped operations plus one direct
+82 grouped editorial capabilities through 12 grouped operations plus one direct
 conversation-image uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
@@ -79,6 +79,8 @@ not expose revision deletion.
 - Upload JPEG, PNG, WebP, and GIF images from caller-supplied base64 data
 - Require an idempotency key for uploads so exact retries cannot create duplicate attachments
 - Edit title, alt text, caption, description, and attachment parent
+- Create a rotated, horizontally/vertically flipped, and/or percentage-cropped derivative from existing media
+- Preserve the original attachment and return the new media ID/URL for a guarded gallery, block, content, or featured-image update
 - Use returned media IDs as featured images on posts/pages
 - No arbitrary remote-URL fetching
 
@@ -312,7 +314,7 @@ v1.12.0+ separates the bridge runtime into independently testable modules:
 Run `npm run check` for syntax validation, `npm test` for the automated suite,
 and `npm run check:openapi` after rendering the schema. The OpenAPI check compares
 the documented method/path set with all annotated implemented handlers and currently
-verifies all 82 operations. CI performs syntax checks, tests, schema rendering, and
+verifies all 83 operations. CI performs syntax checks, tests, schema rendering, and
 the implementation/schema comparison on pushes and pull requests.
 
 WordPress transport failures are normalized. Read-only network failures return `502 wordpress_unreachable` and read-only upstream deadlines return `504 wordpress_timeout`. For mutating requests, a network loss or timeout after the request may have been sent is reported separately as an **unknown write outcome** (`wordpress_write_network_outcome_unknown` / `wordpress_write_timeout_outcome_unknown`) so callers do not mistake it for a definite failure and retry blindly. Raw network exception details are not returned to callers.
@@ -361,6 +363,13 @@ processing reads supported images only from `word/media/*`; ZIP processing finds
 supported images anywhere in the archive. Archives are processed in memory with
 entry-count and expanded-size limits and are never extracted to disk. The original
 `/v1/media` base64 endpoint remains available for direct API clients.
+
+`transformMedia` uses WordPress's native media editor to create a new derivative. It
+supports 90/180/270-degree clockwise rotation, horizontal/vertical flips, and a bounded
+percentage crop. A fresh `modified_gmt`, `confirm=CREATE_TRANSFORMED_MEDIA`, and an
+idempotency key are required. The source attachment is never overwritten or deleted;
+use the returned ID/URL in a separate version-guarded post, page, Gutenberg block,
+gallery, custom-content, or featured-image edit.
 
 Pass the original conversation attachment to the action. A `sandbox:/mnt/data/...`
 reference created by Code Interpreter exists only inside ChatGPT's sandbox and is

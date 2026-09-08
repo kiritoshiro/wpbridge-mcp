@@ -5,7 +5,8 @@ Run `npm ci` after updating, then restart the bridge. Set `PUBLIC_BASE_URL` in
 Import **openapi.gpt.yaml** in the Custom GPT editor and refresh its instructions
 from GPT-INSTRUCTIONS.txt. Keep bearer API-key authentication configured.
 
-The generated GPT schema has 12 operations representing all 81 original actions.
+The generated GPT schema has 12 grouped operations representing 82 restricted actions,
+plus the direct conversation-file upload operation.
 The full `openapi.template.yaml` and `openapi.generated.yaml` still describe the
 original REST endpoints. No original endpoint has been removed.
 

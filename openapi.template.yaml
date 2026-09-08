@@ -1381,6 +1381,90 @@ paths:
       responses:
         '200':
           description: Updated image metadata.
+  /v1/media/{media_id}/transform:
+    post:
+      operationId: transformMedia
+      summary: Rotate, flip, or crop an existing WordPress image.
+      description: Creates a new transformed Media Library attachment and leaves the source unchanged. Requires a fresh media modified_gmt, explicit confirmation, and idempotency. Apply order is rotate, flip, then crop. Replacing content references is a separate guarded edit.
+      parameters:
+      - name: media_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - expected_modified_gmt
+              - confirm
+              - idempotency_key
+              properties:
+                expected_modified_gmt:
+                  type: string
+                  maxLength: 40
+                  description: Exact modified_gmt from the latest getMedia response.
+                confirm:
+                  type: string
+                  enum:
+                  - CREATE_TRANSFORMED_MEDIA
+                idempotency_key:
+                  type: string
+                  minLength: 8
+                  maxLength: 200
+                  pattern: ^[A-Za-z0-9._:-]+$
+                  description: Fresh unique key for this transformed attachment. Reuse only for an identical retry.
+                rotation_degrees:
+                  type: integer
+                  enum:
+                  - 90
+                  - 180
+                  - 270
+                  description: Optional clockwise rotation.
+                flip_horizontal:
+                  type: boolean
+                  default: false
+                flip_vertical:
+                  type: boolean
+                  default: false
+                crop:
+                  type: object
+                  additionalProperties: false
+                  required:
+                  - left
+                  - top
+                  - width
+                  - height
+                  properties:
+                    left:
+                      type: number
+                      minimum: 0
+                      maximum: 100
+                    top:
+                      type: number
+                      minimum: 0
+                      maximum: 100
+                    width:
+                      type: number
+                      exclusiveMinimum: 0
+                      maximum: 100
+                    height:
+                      type: number
+                      exclusiveMinimum: 0
+                      maximum: 100
+                  description: Optional percentage crop rectangle. Left+width and top+height must not exceed 100.
+      responses:
+        '201':
+          description: New transformed media attachment; the source attachment is unchanged.
+        '400':
+          description: Invalid transformation, unsupported media, or missing explicit confirmation.
+        '409':
+          description: Source media changed or no editable source URL is available.
   /v1/categories:
     get:
       operationId: listCategories

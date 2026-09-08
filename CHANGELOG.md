@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add idempotent, version-checked image rotation, flip, and percentage crop through WordPress's native media editor; transforms create a new attachment and preserve the original.
+- Fix the missing constant-time comparison import used by Gutenberg block, revision, taxonomy, and custom-field concurrency guards, and add a real paragraph-block edit regression test.
 - Accept regional OpenAI Actions download hosts under the controlled `*.oaiusercontent.com` domain while continuing to reject other and suffix-spoofed domains.
 - Diagnose non-downloadable ChatGPT sandbox references clearly, accept subdomains of the documented temporary file host, and direct the GPT to pass original DOCX/ZIP attachments instead of Code Interpreter outputs.
 - Accept OpenAI attachment IDs as bounded opaque strings instead of assuming a `file-` prefix that the Actions runtime does not guarantee.

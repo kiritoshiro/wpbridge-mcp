@@ -121,7 +121,10 @@ test("health is public but editorial endpoints require bridge authentication", a
   await withBridge({ wordpress: unusedWordPress() }, async (base) => {
     const health = await fetch(`${base}/health`);
     assert.equal(health.status, 200);
-    assert.equal((await health.json()).version, "1.15.1");
+    const healthBody = await health.json();
+    assert.equal(healthBody.version, "1.15.1");
+    assert.equal(healthBody.media_transform_enabled, true);
+    assert.deepEqual(healthBody.media_transform_operations, ["rotate", "flip", "crop"]);
 
     const posts = await fetch(`${base}/v1/posts`);
     assert.equal(posts.status, 401);
@@ -225,6 +228,149 @@ test("media endpoint rejects unsupported uploads before calling WordPress", asyn
     });
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error, "unsupported_mime_type");
+  });
+});
+
+test("media transform creates a rotated derivative and replays without duplicating it", async () => {
+  const activity = createMemoryActivityStore();
+  let reads = 0;
+  let edits = 0;
+  const source = {
+    id: 44,
+    media_type: "image",
+    mime_type: "image/jpeg",
+    modified_gmt: "2026-09-08T10:00:00",
+    source_url: "https://example.test/wp-content/uploads/photo.jpg",
+    title: { raw: "Photo" },
+    media_details: { width: 1200, height: 800 },
+  };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (restPath, options = {}) => {
+      if (restPath === "/wp-json/wp/v2/media/44?context=edit") {
+        reads += 1;
+        assert.equal(options.method, undefined);
+        return { data: source, headers: new Headers() };
+      }
+      assert.equal(restPath, "/wp-json/wp/v2/media/44/edit");
+      assert.equal(options.method, "POST");
+      assert.deepEqual(options.body, { src: source.source_url, rotation: 90 });
+      edits += 1;
+      return {
+        data: {
+          ...source,
+          id: 45,
+          modified_gmt: "2026-09-08T10:01:00",
+          source_url: "https://example.test/wp-content/uploads/photo-edited.jpg",
+          media_details: { width: 800, height: 1200 },
+        },
+        headers: new Headers(),
+      };
+    },
+  };
+  const envelope = {
+    action: "transformMedia",
+    path: { media_id: 44 },
+    body: {
+      expected_modified_gmt: source.modified_gmt,
+      rotation_degrees: 90,
+      confirm: "CREATE_TRANSFORMED_MEDIA",
+      idempotency_key: "rotate-media-44-90",
+    },
+  };
+
+  await withBridge({ wordpress, activity }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const first = await fetch(`${base}/gpt/media`, { method: "POST", headers, body: JSON.stringify(envelope) });
+    const result = await first.json();
+    assert.equal(first.status, 201);
+    assert.equal(result.source_media_id, 44);
+    assert.equal(result.original_unchanged, true);
+    assert.equal(result.transformed_media.id, 45);
+    assert.deepEqual(result.applied, [{ type: "rotate", angle: 90 }]);
+
+    const replay = await fetch(`${base}/gpt/media`, { method: "POST", headers, body: JSON.stringify(envelope) });
+    assert.equal(replay.status, 201);
+    assert.equal(replay.headers.get("x-idempotency-replayed"), "true");
+    assert.equal(reads, 1);
+    assert.equal(edits, 1);
+
+    const [entry] = activity.list();
+    assert.equal(entry.action, "transform_media");
+    assert.equal(entry.target.object_id, 45);
+    assert.equal(entry.target.source_object_id, 44);
+  });
+});
+
+test("media transform validates crop bounds and stale media before writing", async () => {
+  let edits = 0;
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (restPath, options = {}) => {
+      if (options.method === "POST") {
+        assert.equal(restPath, "/wp-json/wp/v2/media/7/edit");
+        assert.deepEqual(options.body, {
+          src: "https://example.test/image.jpg",
+          modifiers: [
+            { type: "flip", args: { flip: { horizontal: true, vertical: false } } },
+            { type: "crop", args: { left: 10, top: 20, width: 70, height: 60 } },
+          ],
+        });
+        edits += 1;
+        return {
+          data: { id: 8, media_type: "image", modified_gmt: "2026-09-08T11:01:00", source_url: "https://example.test/image-edited.jpg" },
+          headers: new Headers(),
+        };
+      }
+      assert.equal(restPath, "/wp-json/wp/v2/media/7?context=edit");
+      return {
+        data: { id: 7, media_type: "image", modified_gmt: "2026-09-08T11:00:00", source_url: "https://example.test/image.jpg" },
+        headers: new Headers(),
+      };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const invalidCrop = await fetch(`${base}/v1/media/7/transform`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        expected_modified_gmt: "2026-09-08T11:00:00",
+        crop: { left: 60, top: 0, width: 50, height: 100 },
+        confirm: "CREATE_TRANSFORMED_MEDIA",
+        idempotency_key: "bad-crop",
+      }),
+    });
+    assert.equal(invalidCrop.status, 400);
+    assert.equal((await invalidCrop.json()).error, "invalid_image_transform");
+
+    const stale = await fetch(`${base}/v1/media/7/transform`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        expected_modified_gmt: "2026-09-08T10:59:00",
+        flip_horizontal: true,
+        confirm: "CREATE_TRANSFORMED_MEDIA",
+        idempotency_key: "stale-transform-7",
+      }),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).error, "media_changed");
+
+    const valid = await fetch(`${base}/v1/media/7/transform`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        expected_modified_gmt: "2026-09-08T11:00:00",
+        flip_horizontal: true,
+        crop: { left: 10, top: 20, width: 70, height: 60 },
+        confirm: "CREATE_TRANSFORMED_MEDIA",
+        idempotency_key: "flip-crop-transform-7",
+      }),
+    });
+    assert.equal(valid.status, 201);
+    assert.equal((await valid.json()).transformed_media.id, 8);
+    assert.equal(edits, 1);
   });
 });
 
@@ -409,6 +555,62 @@ test("GPT conversation ZIP extraction rejects oversized expanded images before u
     assert.equal(response.status, 413);
     assert.equal((await response.json()).error, "archive_image_too_large");
     assert.equal(uploads, 0);
+  });
+});
+
+test("Gutenberg paragraph replacement uses the current content hash and preserves other content", async () => {
+  const original = '<!-- wp:paragraph --><p>Old text</p><!-- /wp:paragraph --><!-- wp:separator /-->';
+  const replacement = '<!-- wp:paragraph --><p>New text</p><!-- /wp:paragraph -->';
+  let currentContent = original;
+  let writes = 0;
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (restPath, options = {}) => {
+      if (options.method === "POST") {
+        assert.equal(restPath, "/wp-json/wp/v2/posts/77");
+        writes += 1;
+        currentContent = options.body.content;
+      } else {
+        assert.equal(restPath, "/wp-json/wp/v2/posts/77?context=edit");
+      }
+      return {
+        data: {
+          id: 77,
+          status: "draft",
+          modified_gmt: "2026-09-08T12:00:00",
+          title: { raw: "Draft" },
+          content: { raw: currentContent },
+          excerpt: { raw: "" },
+          categories: [],
+          tags: [],
+        },
+        headers: new Headers(),
+      };
+    },
+  };
+
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const listed = await fetch(`${base}/v1/posts/77/blocks`, { headers });
+    const blocks = await listed.json();
+    assert.equal(listed.status, 200);
+    assert.equal(blocks.block_count, 2);
+
+    const edited = await fetch(`${base}/v1/posts/77/blocks`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        operation: "replace",
+        block_index: 0,
+        block_markup: replacement,
+        expected_content_sha256: blocks.content_sha256,
+      }),
+    });
+    const result = await edited.json();
+    assert.equal(edited.status, 200);
+    assert.equal(writes, 1);
+    assert.equal(currentContent, `${replacement}<!-- wp:separator /-->`);
+    assert.equal(result.block_count, 2);
   });
 });
 
