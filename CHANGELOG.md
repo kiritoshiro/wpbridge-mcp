@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Accept OpenAI attachment IDs as bounded opaque strings instead of assuming a `file-` prefix that the Actions runtime does not guarantee.
 - Extract supported images from attached DOCX and ZIP files through the conversation-image action, with strict archive entry, expanded-size, image-count, signature, and decode limits.
 - Add native Custom GPT conversation-image uploads through `openaiFileIdRefs`, restricted temporary OpenAI downloads, bounded batches, pre-upload optimization recommendations, and approval-driven resize/WebP conversion.
 - Make the grouped GPT schema importer-compatible by declaring every request body and nested object with explicit properties and emitting an explicit `components.schemas` object.
