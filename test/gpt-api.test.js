@@ -28,6 +28,14 @@ test("GPT schema has 12 grouped operations plus direct conversation-file upload"
   assert.equal(Object.keys(schema.paths).length, 13);
   assert.equal(operations.size, 82);
   assert.deepEqual(schema.components.schemas, {});
+  for (const [route, item] of Object.entries(schema.paths)) {
+    for (const [method, operation] of Object.entries(item)) {
+      assert.ok(
+        !operation.description || operation.description.length <= 300,
+        `${method.toUpperCase()} ${route} description exceeds 300 characters`
+      );
+    }
+  }
   const actions = [];
   for (const [group, ids] of Object.entries(groups)) {
     const op = schema.paths[`/gpt/${group}`].post;

@@ -1205,7 +1205,7 @@ paths:
       x-gpt-direct: true
       x-openai-isConsequential: true
       summary: Upload conversation images to the WordPress Media Library.
-      description: 'Uploads 1-10 images attached to the current ChatGPT conversation using OpenAI temporary file references. The bridge accepts only HTTPS files.oaiusercontent.com links, validates image signatures and size limits, and never fetches arbitrary URLs. With optimization_mode=ask, large or oversized images are not uploaded; the response recommends resize/WebP conversion so the assistant can obtain user approval. After approval, use optimization_mode=optimize and a fresh idempotency key. Smaller images upload unchanged. GIF optimization is not automatic because it could discard animation.'
+      description: 'Uploads 1-10 conversation images from temporary OpenAI file references. Large images return a no-write optimization recommendation; after user approval, retry with optimize to resize and convert to WebP. Smaller images upload unchanged. Arbitrary URLs are rejected.'
       requestBody:
         required: true
         content:
