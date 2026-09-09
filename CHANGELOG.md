@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add typed, bounded category/tag, parent, attachment, author, exact-ID, date, MIME, sticky, taxonomy-relation, and ordering filters to existing post/page/media/custom-item list actions; request summary fields only for smaller responses.
 - Fall back to bounded, same-origin Sharp processing when WordPress recognizes an attachment but its native image editor cannot open the local JPEG, PNG, or WebP file; upload a MIME-extension-correct new derivative and preserve the original.
 - Add idempotent, version-checked image rotation, flip, and percentage crop through WordPress's native media editor; transforms create a new attachment and preserve the original.
 - Fix the missing constant-time comparison import used by Gutenberg block, revision, taxonomy, and custom-field concurrency guards, and add a real paragraph-block edit regression test.

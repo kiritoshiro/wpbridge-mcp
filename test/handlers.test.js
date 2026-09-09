@@ -132,6 +132,84 @@ test("health is public but editorial endpoints require bridge authentication", a
   });
 });
 
+test("post lists forward precise taxonomy, author, date, ID, and ordering filters", async () => {
+  const calls = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      calls.push(path);
+      return { data: [], headers: new Headers({ "x-wp-total": "0", "x-wp-totalpages": "0" }) };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const url = new URL(`${base}/v1/posts`);
+    for (const [name, value] of Object.entries({
+      category_ids: "12,15",
+      tag_exclude_ids: "4",
+      taxonomy_relation: "AND",
+      sticky: "false",
+      author_id: "7",
+      include_ids: "44,45",
+      published_after: "2026-01-01T00:00:00Z",
+      modified_before: "2026-09-01T12:00:00+03:00",
+      orderby: "include",
+      order: "asc",
+      per_page: "5",
+      page: "2",
+    })) url.searchParams.set(name, value);
+    const response = await fetch(url, { headers: { authorization: `Bearer ${apiKey}` } });
+    assert.equal(response.status, 200);
+    const forwarded = new URL(calls[0], "https://example.test");
+    assert.equal(forwarded.pathname, "/wp-json/wp/v2/posts");
+    assert.equal(forwarded.searchParams.get("categories"), "12,15");
+    assert.equal(forwarded.searchParams.get("tags_exclude"), "4");
+    assert.equal(forwarded.searchParams.get("tax_relation"), "AND");
+    assert.equal(forwarded.searchParams.get("sticky"), "false");
+    assert.equal(forwarded.searchParams.get("author"), "7");
+    assert.equal(forwarded.searchParams.get("include"), "44,45");
+    assert.equal(forwarded.searchParams.get("after"), "2026-01-01T00:00:00Z");
+    assert.equal(forwarded.searchParams.get("modified_before"), "2026-09-01T12:00:00+03:00");
+    assert.equal(forwarded.searchParams.get("orderby"), "include");
+    assert.equal(forwarded.searchParams.get("order"), "asc");
+    assert.match(forwarded.searchParams.get("_fields"), /categories/);
+    assert.doesNotMatch(forwarded.searchParams.get("_fields"), /content/);
+
+    const invalid = await fetch(`${base}/v1/posts?category_ids=12,not-an-id`, {
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("page and media lists forward resource-specific filters and requested ordering", async () => {
+  const calls = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      calls.push(path);
+      return { data: [], headers: new Headers() };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}` };
+    assert.equal((await fetch(`${base}/v1/pages?parent_ids=0,42&orderby=menu_order&order=asc`, { headers })).status, 200);
+    assert.equal((await fetch(`${base}/v1/media?attached_to=17033&mime_type=image%2Fjpeg&modified_after=2026-01-01T00%3A00%3A00Z&orderby=modified&order=asc`, { headers })).status, 200);
+
+    const pages = new URL(calls[0], "https://example.test");
+    assert.equal(pages.searchParams.get("parent"), "0,42");
+    assert.equal(pages.searchParams.get("orderby"), "menu_order");
+    assert.equal(pages.searchParams.get("order"), "asc");
+
+    const media = new URL(calls[1], "https://example.test");
+    assert.equal(media.searchParams.get("parent"), "17033");
+    assert.equal(media.searchParams.get("mime_type"), "image/jpeg");
+    assert.equal(media.searchParams.get("modified_after"), "2026-01-01T00:00:00Z");
+    assert.equal(media.searchParams.get("orderby"), "modified");
+    assert.equal(media.searchParams.get("order"), "asc");
+  });
+});
+
 
 
 test("successful creations record the affected WordPress object without storing content", async () => {

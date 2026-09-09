@@ -157,7 +157,7 @@ paths:
     get:
       operationId: listPosts
       summary: Search or list WordPress posts.
-      description: 'Use search to find posts by keyword. Specify draft status when looking for drafts. Results are ordered by most recently modified.
+      description: 'Use precise category, tag, author, ID, date, sticky, or ordering filters when known; use search for keywords. Specify draft status when looking for drafts.
 
         '
       parameters:
@@ -185,6 +185,138 @@ paths:
         schema:
           type: integer
           minimum: 1
+      - name: category_ids
+        in: query
+        required: false
+        description: Return posts assigned to any of these resolved category IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: category_exclude_ids
+        in: query
+        required: false
+        description: Exclude posts assigned to any of these resolved category IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: tag_ids
+        in: query
+        required: false
+        description: Return posts assigned to any of these resolved tag IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: tag_exclude_ids
+        in: query
+        required: false
+        description: Exclude posts assigned to any of these resolved tag IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: taxonomy_relation
+        in: query
+        required: false
+        description: Relationship between category and tag filters.
+        schema:
+          type: string
+          enum:
+          - AND
+          - OR
+      - name: sticky
+        in: query
+        required: false
+        description: Return only sticky or only non-sticky posts.
+        schema:
+          type: boolean
+      - name: include_ids
+        in: query
+        required: false
+        description: Return only these exact post IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: exclude_ids
+        in: query
+        required: false
+        description: Exclude these post IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: published_after
+        in: query
+        required: false
+        description: Return posts published after this timezone-qualified ISO 8601 time.
+        schema:
+          type: string
+          format: date-time
+      - name: published_before
+        in: query
+        required: false
+        description: Return posts published before this timezone-qualified ISO 8601 time.
+        schema:
+          type: string
+          format: date-time
+      - name: modified_after
+        in: query
+        required: false
+        description: Return posts modified after this timezone-qualified ISO 8601 time.
+        schema:
+          type: string
+          format: date-time
+      - name: modified_before
+        in: query
+        required: false
+        description: Return posts modified before this timezone-qualified ISO 8601 time.
+        schema:
+          type: string
+          format: date-time
+      - name: orderby
+        in: query
+        required: false
+        description: Sort field; defaults to modified, or date for scheduled posts.
+        schema:
+          type: string
+          enum:
+          - author
+          - date
+          - id
+          - include
+          - modified
+          - relevance
+          - title
+      - name: order
+        in: query
+        required: false
+        description: Sort direction; defaults to descending, or ascending for scheduled posts.
+        schema:
+          type: string
+          enum:
+          - asc
+          - desc
       - name: per_page
         in: query
         required: false
@@ -520,7 +652,7 @@ paths:
     get:
       operationId: listPages
       summary: Search or list WordPress pages.
-      description: 'Use search to find pages by keyword. Specify draft status when looking for draft pages. Results are ordered by most recently modified.
+      description: 'Use precise parent, author, ID, date, or ordering filters when known; use search for keywords. Specify draft status when looking for draft pages.
 
         '
       parameters:
@@ -548,6 +680,97 @@ paths:
         schema:
           type: integer
           minimum: 1
+      - name: parent_ids
+        in: query
+        required: false
+        description: Return direct children of any of these page IDs; use 0 for top-level pages.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 0
+      - name: parent_exclude_ids
+        in: query
+        required: false
+        description: Exclude direct children of these page IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 0
+      - name: include_ids
+        in: query
+        required: false
+        description: Return only these exact page IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: exclude_ids
+        in: query
+        required: false
+        description: Exclude these page IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: published_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: published_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: orderby
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - author
+          - date
+          - id
+          - include
+          - menu_order
+          - modified
+          - parent
+          - relevance
+          - title
+      - name: order
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - asc
+          - desc
       - name: per_page
         in: query
         required: false
@@ -1251,13 +1474,103 @@ paths:
     get:
       operationId: listMedia
       summary: List or search image attachments in the WordPress Media Library.
-      description: Only image attachments are returned.
+      description: Use attachment-parent, author, MIME, ID, date, or ordering filters to narrow results efficiently. Only image attachments are returned.
       parameters:
       - name: search
         in: query
         required: false
         schema:
           type: string
+      - name: attached_to
+        in: query
+        required: false
+        description: Return images attached to this post/page ID; use 0 for unattached images.
+        schema:
+          type: integer
+          minimum: 0
+      - name: author_id
+        in: query
+        required: false
+        description: Return images uploaded by this WordPress author ID.
+        schema:
+          type: integer
+          minimum: 1
+      - name: mime_type
+        in: query
+        required: false
+        description: Restrict results to one supported image MIME type.
+        schema:
+          type: string
+          enum:
+          - image/jpeg
+          - image/png
+          - image/webp
+          - image/gif
+      - name: include_ids
+        in: query
+        required: false
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: exclude_ids
+        in: query
+        required: false
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: published_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: published_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: orderby
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - author
+          - date
+          - id
+          - include
+          - modified
+          - relevance
+          - title
+      - name: order
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - asc
+          - desc
       - name: per_page
         in: query
         required: false
@@ -2063,6 +2376,7 @@ paths:
     get:
       operationId: listCustomItems
       summary: Search or list items from an allowlisted custom post type.
+      description: Use author, exact-ID, date, or ordering filters when supported by the type; use search for keywords.
       parameters:
       - name: post_type
         in: path
@@ -2095,6 +2409,73 @@ paths:
         schema:
           type: integer
           minimum: 1
+      - name: include_ids
+        in: query
+        required: false
+        description: Return only these exact custom-item IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: exclude_ids
+        in: query
+        required: false
+        description: Exclude these custom-item IDs.
+        schema:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: integer
+            minimum: 1
+      - name: published_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: published_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_after
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: modified_before
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: orderby
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - author
+          - date
+          - id
+          - include
+          - modified
+          - relevance
+          - title
+      - name: order
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - asc
+          - desc
       - name: per_page
         in: query
         required: false

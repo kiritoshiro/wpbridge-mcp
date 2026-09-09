@@ -12,6 +12,7 @@ content through a **private Custom GPT Action**.
 
 ### Posts
 - Read/search published posts and drafts
+- Filter lists directly by category/tag inclusion or exclusion, taxonomy relation, sticky state, author, exact IDs, publication/modification time, and explicit ordering
 - Read full editable post content and a SHA-256 content fingerprint
 - Create drafts
 - Preview proposed title/content/excerpt/slug/category/tag/author/featured-media changes without writing
@@ -20,6 +21,7 @@ content through a **private Custom GPT Action**.
 
 ### Pages
 - Read/search published pages and drafts
+- Filter lists by parent, author, exact IDs, publication/modification time, and explicit ordering
 - Read full editable page content and a SHA-256 content fingerprint
 - Create draft pages
 - Preview proposed title/content/slug/parent/menu-order/template/author/featured-media changes without writing
@@ -70,6 +72,7 @@ not expose revision deletion.
 
 ### Image media
 - List/search image attachments in the Media Library
+- Filter lists by attached post/page, author, MIME type, exact IDs, publication/modification time, and explicit ordering
 - Read image metadata
 - Upload up to 10 images attached to a ChatGPT conversation through temporary OpenAI file references
 - Extract JPEG, PNG, WebP, and GIF images embedded in attached DOCX files or stored in ZIP archives
@@ -83,6 +86,8 @@ not expose revision deletion.
 - Preserve the original attachment and return the new media ID/URL for a guarded gallery, block, content, or featured-image update
 - Use returned media IDs as featured images on posts/pages
 - No arbitrary remote-URL fetching
+
+Collection responses request only the bounded summary fields used by WPBridge. This reduces WordPress response size while full-item read actions remain available when editable content is needed. Allowlisted custom-item lists also support author, exact-ID, date, and ordering filters.
 
 ### Editorial audits / workflow queue
 - Inspect one post/page/allowlisted custom item with `getEditorialStatus`

@@ -74,6 +74,35 @@ test("direct conversation-file action maps only to the fixed attachment upload r
   });
 });
 
+test("grouped list actions serialize typed array filters without widening the dispatcher", async () => {
+  const original = request("contentRead", {
+    action: "listPosts",
+    query: {
+      category_ids: [4, 8],
+      tag_exclude_ids: [3],
+      sticky: false,
+      orderby: "title",
+      order: "asc",
+    },
+  });
+  const mapped = await translateGptRequest(original, 100000);
+  const mappedUrl = new URL(mapped.url, "http://bridge.test");
+  assert.equal(mappedUrl.pathname, "/v1/posts");
+  assert.equal(mappedUrl.searchParams.get("category_ids"), "4,8");
+  assert.equal(mappedUrl.searchParams.get("tag_exclude_ids"), "3");
+  assert.equal(mappedUrl.searchParams.get("sticky"), "false");
+  assert.equal(mappedUrl.searchParams.get("orderby"), "title");
+  assert.equal(mappedUrl.searchParams.get("order"), "asc");
+
+  await assert.rejects(
+    () => translateGptRequest(request("contentRead", {
+      action: "listPosts",
+      query: { category_ids: ["4"] },
+    }), 100000),
+    { status: 400 }
+  );
+});
+
 test("every allowlisted action translates to its original method and route", async () => {
   for (const [group, ids] of Object.entries(groups)) {
     for (const action of ids) {
