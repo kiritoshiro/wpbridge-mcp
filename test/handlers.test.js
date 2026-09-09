@@ -339,7 +339,7 @@ test("media transform falls back to bounded bridge processing when WordPress can
     },
     wpImageUpload: async (filename, mimeType, data) => {
       uploads += 1;
-      assert.equal(filename, "media-91-transformed");
+      assert.equal(filename, "media-91-transformed.jpg");
       assert.equal(mimeType, "image/jpeg");
       const metadata = await sharp(data).metadata();
       assert.equal(metadata.width, 80);
