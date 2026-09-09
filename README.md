@@ -364,7 +364,11 @@ supported images anywhere in the archive. Archives are processed in memory with
 entry-count and expanded-size limits and are never extracted to disk. The original
 `/v1/media` base64 endpoint remains available for direct API clients.
 
-`transformMedia` uses WordPress's native media editor to create a new derivative. It
+`transformMedia` first uses WordPress's native media editor to create a new derivative. If
+WordPress cannot open its local image file, the bridge can fall back to downloading only
+the same-origin source URL returned by authenticated WordPress, transforming the bounded
+JPEG/PNG/WebP bytes with Sharp, and uploading the result as a new attachment. It never
+uses a caller-supplied URL, follows a redirect, or fetches a different origin. The operation
 supports 90/180/270-degree clockwise rotation, horizontal/vertical flips, and a bounded
 percentage crop. A fresh `modified_gmt`, `confirm=CREATE_TRANSFORMED_MEDIA`, and an
 idempotency key are required. The source attachment is never overwritten or deleted;

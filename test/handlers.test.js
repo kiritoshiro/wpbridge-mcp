@@ -73,7 +73,7 @@ function unusedWordPress() {
   const fail = async () => {
     throw new Error("WordPress should not have been called");
   };
-  return { wpRequest: fail, wpSeoHelperRequest: fail, wpImageUpload: fail };
+  return { wpRequest: fail, wpSeoHelperRequest: fail, wpImageUpload: fail, wpImageDownload: fail };
 }
 
 test("grouped API preserves auth, publish guards, and idempotency requirements", async () => {
@@ -301,6 +301,82 @@ test("media transform creates a rotated derivative and replays without duplicati
     assert.equal(entry.action, "transform_media");
     assert.equal(entry.target.object_id, 45);
     assert.equal(entry.target.source_object_id, 44);
+  });
+});
+
+test("media transform falls back to bounded bridge processing when WordPress cannot open its local image", async () => {
+  const sourceData = await sharp({
+    create: { width: 120, height: 80, channels: 3, background: "#336699" },
+  }).jpeg().toBuffer();
+  let nativeEdits = 0;
+  let downloads = 0;
+  let uploads = 0;
+  const source = {
+    id: 91,
+    media_type: "image",
+    mime_type: "image/jpeg",
+    modified_gmt: "2026-09-09T08:00:00",
+    source_url: "https://example.test/wp-content/uploads/source.jpg",
+  };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (restPath, options = {}) => {
+      if (restPath === "/wp-json/wp/v2/media/91?context=edit") return { data: source, headers: new Headers() };
+      assert.equal(restPath, "/wp-json/wp/v2/media/91/edit");
+      assert.equal(options.method, "POST");
+      nativeEdits += 1;
+      throw Object.assign(new Error("Unable to edit this image."), {
+        status: 500,
+        code: "rest_unknown_image_file_type",
+        outcome: "failed",
+      });
+    },
+    wpImageDownload: async (sourceUrl, maxBytes) => {
+      downloads += 1;
+      assert.equal(sourceUrl, source.source_url);
+      assert.equal(maxBytes, 500_000);
+      return sourceData;
+    },
+    wpImageUpload: async (filename, mimeType, data) => {
+      uploads += 1;
+      assert.equal(filename, "media-91-transformed");
+      assert.equal(mimeType, "image/jpeg");
+      const metadata = await sharp(data).metadata();
+      assert.equal(metadata.width, 80);
+      assert.equal(metadata.height, 120);
+      return {
+        id: 92,
+        media_type: "image",
+        mime_type: mimeType,
+        source_url: "https://example.test/wp-content/uploads/media-91-transformed.jpg",
+        media_details: { width: metadata.width, height: metadata.height, filesize: data.length },
+      };
+    },
+  };
+
+  await withBridge({ wordpress }, async (base) => {
+    const response = await fetch(`${base}/gpt/media`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "transformMedia",
+        path: { media_id: 91 },
+        body: {
+          expected_modified_gmt: source.modified_gmt,
+          rotation_degrees: 90,
+          confirm: "CREATE_TRANSFORMED_MEDIA",
+          idempotency_key: ["fallback", "transform", "91"].join("-"),
+        },
+      }),
+    });
+    const result = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(result.transform_engine, "wpbridge_sharp_fallback");
+    assert.equal(result.original_unchanged, true);
+    assert.equal(result.transformed_media.id, 92);
+    assert.equal(nativeEdits, 1);
+    assert.equal(downloads, 1);
+    assert.equal(uploads, 1);
   });
 });
 

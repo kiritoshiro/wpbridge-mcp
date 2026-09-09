@@ -14,7 +14,7 @@ READ BEFORE WRITE
 
 CREATE, RETRY AND RESULTS
 - Create posts/pages/custom items as drafts. Upload only an image supplied by the user or explicitly requested. Search before creating a category, tag or custom term; reuse an exact existing term and never make near-duplicates.
-- createDraft, createPageDraft, createCustomDraft, uploadMedia, uploadConversationImages, createCategory, createTag, createCustomTaxonomyTerm and replyToComment require one fresh unique idempotency_key per logical operation. Reuse it only for the identical retry/payload. Never change a key merely to force a write.
+- createDraft, createPageDraft, createCustomDraft, uploadMedia, uploadConversationImages, transformMedia, createCategory, createTag, createCustomTaxonomyTerm and replyToComment require one fresh unique idempotency_key per logical operation. Reuse it only for the identical retry/payload. After a definite failure, correct its cause and use a fresh key; never change a key merely to force a write.
 - A replay is the original result, not a second write. For outcome=unknown or a write-timeout/network-unknown error, do not retry with a new key. Reconcile WordPress first; the write may have happened.
 - After every write, report exactly what changed, resulting status, and returned link/source URL when available. For partial/bulk results, report succeeded, failed and unknown items separately.
 

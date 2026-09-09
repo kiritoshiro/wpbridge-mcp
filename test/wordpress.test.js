@@ -119,6 +119,43 @@ test("image uploads send raw bytes with constrained WordPress media headers", as
   assert.deepEqual(captured.options.body, data);
 });
 
+test("image fallback downloads only bounded media from the configured WordPress origin", async () => {
+  const data = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  let captured;
+  const client = createWordPressClient(cfg, {
+    fetchImpl: async (url, options) => {
+      captured = { url: String(url), options };
+      return new Response(data, {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "content-length": String(data.length) },
+      });
+    },
+  });
+
+  const result = await client.wpImageDownload("https://example.test/wp-content/uploads/image.jpg", 100);
+  assert.deepEqual(result, data);
+  assert.equal(captured.url, "https://example.test/wp-content/uploads/image.jpg");
+  assert.equal(captured.options.method, "GET");
+  assert.match(captured.options.headers.authorization, /^Basic /);
+  assert.equal(captured.options.redirect, "error");
+});
+
+test("image fallback rejects a WordPress-supplied cross-origin URL before downloading", async () => {
+  let fetches = 0;
+  const client = createWordPressClient(cfg, {
+    fetchImpl: async () => {
+      fetches += 1;
+      throw new Error("must not fetch");
+    },
+  });
+
+  await assert.rejects(
+    () => client.wpImageDownload("https://cdn.example.test/image.jpg", 100),
+    (error) => error.status === 409 && error.code === "wordpress_media_source_not_allowed"
+  );
+  assert.equal(fetches, 0);
+});
+
 
 test("mutating WordPress timeouts are marked as unknown outcomes", async () => {
   const client = createWordPressClient(cfg, {
