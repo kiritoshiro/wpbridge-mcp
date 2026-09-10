@@ -242,6 +242,34 @@ test("post list resolves an exact category name or slug before filtering", async
   });
 });
 
+test("category-only prepared bulk scope omits an empty tags parameter", async () => {
+  const calls = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      calls.push(path);
+      if (!path.startsWith("/wp-json/wp/v2/posts?")) throw new Error(`unexpected path ${path}`);
+      const query = new URL(path, "https://example.test").searchParams;
+      assert.equal(query.get("categories"), "419140");
+      assert.equal(query.has("tags"), false);
+      return { data: [], headers: new Headers({ "x-wp-totalpages": "0" }) };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const response = await fetch(`${base}/v1/editorial/bulk/prepare`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotency_key: "bulk-category-only-001",
+        scope: { category_ids: [419140], status: "publish" },
+        operations: { alps: { large_banner: "none", hide_featured_image: true } },
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+  });
+});
+
 test("page and media lists forward resource-specific filters and requested ordering", async () => {
   const calls = [];
   const wordpress = {
