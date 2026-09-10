@@ -37,6 +37,10 @@ content through a **private Custom GPT Action**.
 - Install `wordpress/wpbridge-alps-helper` on an ALPS site to map the public
   values to the theme's `_featured_image_hero_layout` and `_hide_featured_image`
   keys. The helper never exposes arbitrary post meta.
+- If an older helper deployment does not match the POST route, the bridge
+  falls back only to those fixed keys when WordPress already exposes them in
+  the current item's REST `meta`; otherwise it returns a setup error before
+  reporting the edit as successful.
 
 ### Prepared bulk editorial operations
 - `prepareBulkOperation` requires an explicit category/tag/ID/status/author/date,

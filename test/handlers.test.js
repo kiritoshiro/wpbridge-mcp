@@ -173,6 +173,117 @@ test("ALPS helper fields are exposed on reads and protected by an ALPS fingerpri
   });
 });
 
+test("combined post edits fall back to fixed REST-exposed ALPS meta when the helper route is unavailable", async () => {
+  const current = {
+    id: 42,
+    status: "draft",
+    modified_gmt: "2026-09-08T08:30:00Z",
+    featured_media: 0,
+    title: { raw: "ALPS post", rendered: "ALPS post" },
+    content: { raw: "Body", rendered: "Body" },
+    excerpt: { raw: "", rendered: "" },
+    categories: [],
+    tags: [],
+    meta: { _featured_image_hero_layout: "false", _hide_featured_image: "" },
+    alps_sha256: "c".repeat(64),
+  };
+  const writes = [];
+  const wordpress = {
+    wpRequest: async (path, options = {}) => {
+      if (path === "/wp-json/wp/v2/posts/42?context=edit") return { data: current, headers: new Headers() };
+      if (path === "/wp-json/wp/v2/posts/42" && options.method === "POST") {
+        writes.push(options.body);
+        if (options.body.featured_media !== undefined) current.featured_media = options.body.featured_media;
+        if (options.body.meta) current.meta = { ...current.meta, ...options.body.meta };
+        return { data: current, headers: new Headers() };
+      }
+      throw new Error(`unexpected path ${path}`);
+    },
+    wpAlpsHelperRequest: async () => {
+      const err = new Error("The REST route was not found.");
+      err.status = 404;
+      err.code = "rest_no_route";
+      throw err;
+    },
+    wpSeoHelperRequest: async () => { throw new Error("unused"); },
+    wpImageUpload: async () => { throw new Error("unused"); },
+  };
+  await withBridge({ cfg: baseConfig({ allowLiveEdits: true }), wordpress }, async (base) => {
+    const response = await fetch(`${base}/v1/posts/42`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        expected_modified_gmt: current.modified_gmt,
+        expected_alps_sha256: current.alps_sha256,
+        featured_image_id: 16136,
+        alps: { large_banner: "none", hide_featured_image: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(writes, [
+      { featured_media: 16136 },
+      { meta: { _featured_image_hero_layout: "false", _hide_featured_image: "true" } },
+    ]);
+    const body = await response.json();
+    assert.equal(body.featured_image_id, 16136);
+    assert.equal(body.alps.hide_featured_image, true);
+  });
+});
+
+test("combined post edits roll back a featured-image write when ALPS cannot be applied", async () => {
+  const current = {
+    id: 42,
+    status: "draft",
+    modified_gmt: "2026-09-08T08:30:00Z",
+    featured_media: 0,
+    title: { raw: "ALPS post", rendered: "ALPS post" },
+    content: { raw: "Body", rendered: "Body" },
+    excerpt: { raw: "", rendered: "" },
+    categories: [],
+    tags: [],
+  };
+  const writes = [];
+  const wordpress = {
+    wpRequest: async (path, options = {}) => {
+      if (path === "/wp-json/wp/v2/posts/42?context=edit") return { data: current, headers: new Headers() };
+      if (path === "/wp-json/wp/v2/posts/42" && options.method === "POST") {
+        writes.push(options.body);
+        if (options.body.featured_media !== undefined) current.featured_media = options.body.featured_media;
+        return { data: current, headers: new Headers() };
+      }
+      throw new Error(`unexpected path ${path}`);
+    },
+    wpAlpsHelperRequest: async (_path, options = {}) => {
+      if (!options.body) return { data: { fields: { large_banner: "none", hide_featured_image: false }, alps_sha256: "c".repeat(64) }, headers: new Headers() };
+      const err = new Error("The REST route was not found.");
+      err.status = 404;
+      err.code = "rest_no_route";
+      throw err;
+    },
+    wpSeoHelperRequest: async () => { throw new Error("unused"); },
+    wpImageUpload: async () => { throw new Error("unused"); },
+  };
+  await withBridge({ cfg: baseConfig({ allowLiveEdits: true }), wordpress }, async (base) => {
+    const response = await fetch(`${base}/v1/posts/42`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        expected_modified_gmt: current.modified_gmt,
+        expected_alps_sha256: "c".repeat(64),
+        featured_image_id: 16136,
+        alps: { large_banner: "none", hide_featured_image: true },
+      }),
+    });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error, "alps_helper_write_unavailable");
+    assert.equal(body.rollback_outcome, "succeeded");
+    assert.equal(body.partial_update, undefined);
+    assert.deepEqual(writes, [{ featured_media: 16136 }, { featured_media: 0 }]);
+    assert.equal(current.featured_media, 0);
+  });
+});
+
 test("post lists forward precise taxonomy, author, date, ID, and ordering filters", async () => {
   const calls = [];
   const wordpress = {

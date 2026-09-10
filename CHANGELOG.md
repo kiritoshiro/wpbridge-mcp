@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix category-only query serialization so empty `tags` parameters are omitted; add a safe fallback for fixed, REST-exposed ALPS meta when the helper write route is unavailable.
+- Make combined featured-image plus ALPS edits roll back a completed featured-image write when ALPS cannot be applied, and report rollback/partial-update state explicitly.
+- Register the ALPS helper write route explicitly for `POST` compatibility with older WordPress REST servers.
 - Add an optional ALPS helper adapter for normalized featured-image layout/hide fields, expose featured-image summaries and `featured_image_id` aliases, and add frozen, filtered, chunked bulk plans with conflict-guarded execution and rollback.
 - Keep the grouped GPT schema at 13 operations while adding typed bulk prepare/execute/status/rollback actions and concise ALPS/bulk guidance under the 8,000-character instruction limit.
 - Add typed, bounded category/tag, parent, attachment, author, exact-ID, date, MIME, sticky, taxonomy-relation, and ordering filters to existing post/page/media/custom-item list actions; request summary fields only for smaller responses.

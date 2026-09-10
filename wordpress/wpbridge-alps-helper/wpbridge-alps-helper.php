@@ -89,7 +89,11 @@ add_action('rest_api_init', function () {
             },
         ),
         array(
-            'methods' => WP_REST_Server::EDITABLE,
+            // WPBridge sends POST for an ALPS update.  Use the explicit
+            // creatable method here so older WordPress REST servers do not
+            // fail to match the route when EDITABLE is expanded to a
+            // comma-delimited method list.
+            'methods' => WP_REST_Server::CREATABLE,
             'permission_callback' => function ($request) {
                 $post_id = (int) $request['id'];
                 return current_user_can('edit_post', $post_id);

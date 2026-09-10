@@ -114,6 +114,9 @@ For ALPS sites, copy `wordpress/wpbridge-alps-helper/wpbridge-alps-helper.php`
 to `wp-content/plugins/wpbridge-alps-helper/`, activate it, and keep the
 default ALPS fields exposed by the helper. It maps WPBridge's normalized
 `large_banner`/`hide_featured_image` values to the theme's fixed meta keys.
+The helper's ALPS write route accepts `POST`, matching the bridge. If an
+existing installation returns `rest_no_route` only for ALPS writes, replace
+the deployed helper file with this version and reactivate the plugin.
 
 Custom post types, custom fields, and custom taxonomies are disabled by default. To enable only
 specific custom content, add explicit allowlists. For example:
