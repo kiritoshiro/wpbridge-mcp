@@ -48,4 +48,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Validate WordPress helper syntax
-        run: php -l wordpress/wpbridge-seo-helper/wpbridge-seo-helper.php
+        run: |
+          php -l wordpress/wpbridge-seo-helper/wpbridge-seo-helper.php
+          php -l wordpress/wpbridge-alps-helper/wpbridge-alps-helper.php

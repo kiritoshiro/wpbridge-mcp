@@ -89,6 +89,32 @@ test("activity history configuration is strictly validated", () => {
   assert.throws(() => loadConfig({ ...base, ACTIVITY_STORE_PATH: "   " }), /ACTIVITY_STORE_PATH must not be empty/);
 });
 
+test("prepared bulk operation settings are bounded and configurable", () => {
+  const base = {
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  };
+  const cfg = loadConfig({
+    ...base,
+    BULK_OPERATION_STORE_PATH: ".data/bulk.json",
+    BULK_OPERATION_RETENTION_HOURS: "48",
+    BULK_OPERATION_MAX_RECORDS: "40",
+    BULK_OPERATION_MAX_ITEMS: "500",
+    BULK_OPERATION_LARGE_THRESHOLD: "80",
+    BULK_OPERATION_CHUNK_SIZE: "10",
+  });
+  assert.equal(cfg.bulkOperationStorePath, ".data/bulk.json");
+  assert.equal(cfg.bulkOperationRetentionHours, 48);
+  assert.equal(cfg.bulkOperationMaxRecords, 40);
+  assert.equal(cfg.bulkOperationMaxItems, 500);
+  assert.equal(cfg.bulkOperationLargeThreshold, 80);
+  assert.equal(cfg.bulkOperationChunkSize, 10);
+  assert.throws(() => loadConfig({ ...base, BULK_OPERATION_MAX_ITEMS: "99" }), /BULK_OPERATION_MAX_ITEMS must/);
+  assert.throws(() => loadConfig({ ...base, BULK_OPERATION_STORE_PATH: " " }), /BULK_OPERATION_STORE_PATH must not be empty/);
+});
+
 test("conversation image limits and optimization settings are bounded and consistent", () => {
   const base = {
     WP_URL: "https://example.test/wordpress",

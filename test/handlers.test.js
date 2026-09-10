@@ -132,6 +132,47 @@ test("health is public but editorial endpoints require bridge authentication", a
   });
 });
 
+test("ALPS helper fields are exposed on reads and protected by an ALPS fingerprint on edits", async () => {
+  const beforeHash = "c".repeat(64);
+  const current = {
+    id: 42, status: "draft", modified_gmt: "2026-09-08T08:30:00Z", featured_media: 77,
+    title: { raw: "ALPS post", rendered: "ALPS post" }, content: { raw: "Body", rendered: "Body" },
+    excerpt: { raw: "", rendered: "" }, categories: [], tags: [],
+  };
+  let helperWrites = 0;
+  const wordpress = {
+    wpRequest: async (path, options = {}) => {
+      if (path === "/wp-json/wp/v2/posts/42?context=edit") return { data: current, headers: new Headers() };
+      if (path === "/wp-json/wp/v2/posts/42" && options.method === "POST") return { data: current, headers: new Headers() };
+      throw new Error(`unexpected path ${path}`);
+    },
+    wpAlpsHelperRequest: async (_path, options = {}) => {
+      if (!options.body) return { data: { fields: { large_banner: "none", hide_featured_image: false }, alps_sha256: beforeHash }, headers: new Headers() };
+      helperWrites += 1;
+      return { data: { fields: { large_banner: options.body.large_banner, hide_featured_image: options.body.hide_featured_image }, alps_sha256: "d".repeat(64) }, headers: new Headers() };
+    },
+    wpSeoHelperRequest: async () => { throw new Error("unused"); },
+    wpImageUpload: async () => { throw new Error("unused"); },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const read = await fetch(`${base}/v1/posts/42`, { headers });
+    const readBody = await read.json();
+    assert.equal(read.status, 200);
+    assert.deepEqual(readBody.featured_image, { id: 77, url: null });
+    assert.deepEqual(readBody.alps, { large_banner: "none", hide_featured_image: false, alps_sha256: beforeHash });
+    const edit = await fetch(`${base}/v1/posts/42`, { method: "PATCH", headers, body: JSON.stringify({
+      expected_modified_gmt: current.modified_gmt, expected_alps_sha256: beforeHash,
+      alps: { large_banner: "hero_50_50", hide_featured_image: true },
+    }) });
+    const editBody = await edit.json();
+    assert.equal(edit.status, 200);
+    assert.equal(helperWrites, 1);
+    assert.equal(editBody.alps.large_banner, "hero_50_50");
+    assert.equal(editBody.alps.hide_featured_image, true);
+  });
+});
+
 test("post lists forward precise taxonomy, author, date, ID, and ordering filters", async () => {
   const calls = [];
   const wordpress = {
@@ -179,6 +220,25 @@ test("post lists forward precise taxonomy, author, date, ID, and ordering filter
     });
     assert.equal(invalid.status, 400);
     assert.equal(calls.length, 1);
+  });
+});
+
+test("post list resolves an exact category name or slug before filtering", async () => {
+  const calls = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      calls.push(path);
+      if (path.startsWith("/wp-json/wp/v2/categories?")) return { data: [{ id: 17, name: "Dvasiniai skaitiniai", slug: "dvasiniai-skaitiniai" }], headers: new Headers() };
+      return { data: [], headers: new Headers({ "x-wp-total": "0", "x-wp-totalpages": "0" }) };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const response = await fetch(`${base}/v1/posts?category=${encodeURIComponent("Dvasiniai skaitiniai")}`, { headers: { authorization: `Bearer ${apiKey}` } });
+    assert.equal(response.status, 200);
+    const postsQuery = new URL(calls.at(-1), "https://example.test");
+    assert.equal(postsQuery.pathname, "/wp-json/wp/v2/posts");
+    assert.equal(postsQuery.searchParams.get("categories"), "17");
   });
 });
 
@@ -1113,6 +1173,85 @@ test("bulk edit returns retryable items only for definite write failures", async
     assert.deepEqual(data.retryable_items.map((item) => item.object_id), [2]);
     assert.equal(data.results[0].outcome, "succeeded");
     assert.equal(data.results[1].outcome, "failed");
+  });
+});
+
+test("prepared bulk plans apply filtered featured images and ALPS in chunks, then roll back safely", async () => {
+  const hashBefore = "a".repeat(64);
+  const hashAfter = "b".repeat(64);
+  const states = new Map([
+    [1, { featured_media: 0, alps: { large_banner: "none", hide_featured_image: false }, hash: hashBefore }],
+    [2, { featured_media: 22, alps: { large_banner: "none", hide_featured_image: false }, hash: hashBefore }],
+  ]);
+  const items = [1, 2].map((id) => ({
+    id, status: "draft", modified_gmt: "2026-09-08T08:00:00Z", featured_media: states.get(id).featured_media,
+    title: { raw: `Bulk ${id}`, rendered: `Bulk ${id}` },
+    content: id === 1 ? { raw: '<!-- wp:image {"id":11} --><img src="image.jpg" /><!-- /wp:image -->' } : { raw: "<p>No image</p>" },
+  }));
+  const writes = [];
+  const wordpress = {
+    wpRequest: async (path, options = {}) => {
+      if (path.startsWith("/wp-json/wp/v2/posts?")) return { data: items, headers: new Headers({ "x-wp-totalpages": "1" }) };
+      const media = path.match(/^\/wp-json\/wp\/v2\/media\/(\d+)\?context=view$/);
+      if (media) return { data: { id: Number(media[1]), media_type: "image", mime_type: "image/jpeg", source_url: "https://example.test/image.jpg" }, headers: new Headers() };
+      const current = path.match(/^\/wp-json\/wp\/v2\/posts\/(\d+)\?context=edit$/);
+      if (current) {
+        const id = Number(current[1]);
+        return { data: { ...items[id - 1], featured_media: states.get(id).featured_media }, headers: new Headers() };
+      }
+      const update = path.match(/^\/wp-json\/wp\/v2\/posts\/(\d+)$/);
+      if (update && options.method === "POST") {
+        const id = Number(update[1]);
+        if (options.body.featured_media !== undefined) states.get(id).featured_media = options.body.featured_media;
+        writes.push({ id, body: options.body });
+        return { data: { ...items[id - 1], featured_media: states.get(id).featured_media }, headers: new Headers() };
+      }
+      throw new Error(`unexpected path ${path}`);
+    },
+    wpAlpsHelperRequest: async (path, options = {}) => {
+      const match = path.match(/^\/wp-json\/wpbridge\/v1\/alps\/post\/(\d+)$/);
+      assert.ok(match);
+      const state = states.get(Number(match[1]));
+      if (!options.body) return { data: { fields: state.alps, alps_sha256: state.hash }, headers: new Headers() };
+      state.alps = { large_banner: options.body.large_banner ?? state.alps.large_banner, hide_featured_image: options.body.hide_featured_image ?? state.alps.hide_featured_image };
+      state.hash = state.alps.large_banner === "none" ? hashBefore : hashAfter;
+      return { data: { fields: state.alps, alps_sha256: state.hash }, headers: new Headers() };
+    },
+    wpSeoHelperRequest: async () => { throw new Error("unused"); },
+    wpImageUpload: async () => { throw new Error("unused"); },
+  };
+
+  await withBridge({ cfg: baseConfig({ allowLiveEdits: true, bulkOperationChunkSize: 1 }), wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const prepare = await fetch(`${base}/v1/editorial/bulk/prepare`, { method: "POST", headers, body: JSON.stringify({
+      idempotency_key: "bulk-plan-001", scope: { post_ids: [1, 2], status: "draft" },
+      operations: { featured_image: { strategy: "first_content_image", only_if_missing: true }, alps: { large_banner: "hero_50_50", hide_featured_image: true } },
+    }) });
+    assert.equal(prepare.status, 200);
+    const plan = await prepare.json();
+    assert.equal(plan.state, "prepared");
+    assert.equal(plan.summary.ready, 2);
+    assert.equal(plan.summary.featured_image_changes, 1);
+    assert.equal(plan.summary.alps_changes, 2);
+    assert.equal(writes.length, 0);
+
+    const execute = async (key) => fetch(`${base}/v1/editorial/bulk/${plan.operation_id}/execute`, { method: "POST", headers, body: JSON.stringify({ confirm: "APPLY_BULK_OPERATION", idempotency_key: key, chunk_size: 1 }) });
+    assert.equal((await execute("bulk-exec-001")).status, 206);
+    assert.equal((await execute("bulk-exec-002")).status, 200);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0], { id: 1, body: { featured_media: 11 } });
+    const status = await fetch(`${base}/v1/editorial/bulk/${plan.operation_id}`, { headers });
+    const completed = await status.json();
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.counts.changed, 2);
+
+    const rollback = await fetch(`${base}/v1/editorial/bulk/${plan.operation_id}/rollback`, { method: "POST", headers, body: JSON.stringify({ confirm: "ROLLBACK_BULK_OPERATION", idempotency_key: "bulk-rollback-001", chunk_size: 2 }) });
+    assert.equal(rollback.status, 200);
+    const rolled = await rollback.json();
+    assert.equal(rolled.state, "rolled_back");
+    assert.equal(rolled.results.filter((result) => result.rollback_outcome === "rolled_back").length, 2);
+    assert.equal(states.get(1).featured_media, 0);
+    assert.equal(states.get(1).alps.large_banner, "none");
   });
 });
 

@@ -16,6 +16,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: API key
+  schemas: {}
 paths:
   /health:
     get:
@@ -196,6 +197,13 @@ paths:
           items:
             type: integer
             minimum: 1
+      - name: category
+        in: query
+        required: false
+        description: Resolve one exact category name or slug, then filter posts by its ID.
+        schema:
+          type: string
+          maxLength: 200
       - name: category_exclude_ids
         in: query
         required: false
@@ -218,6 +226,13 @@ paths:
           items:
             type: integer
             minimum: 1
+      - name: tag
+        in: query
+        required: false
+        description: Resolve one exact tag name or slug, then filter posts by its ID.
+        schema:
+          type: string
+          maxLength: 200
       - name: tag_exclude_ids
         in: query
         required: false
@@ -377,6 +392,9 @@ paths:
                 featured_media:
                   type: integer
                   minimum: 0
+                featured_image_id:
+                  type: integer
+                  minimum: 0
                 author_id:
                   type: integer
                   minimum: 1
@@ -458,6 +476,21 @@ paths:
                 featured_media:
                   type: integer
                   minimum: 0
+                featured_image_id:
+                  type: integer
+                  minimum: 0
+                alps:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    large_banner:
+                      type: string
+                      enum: [none, hero_50_50, image_text_overlay]
+                    hide_featured_image:
+                      type: boolean
+                expected_alps_sha256:
+                  type: string
+                  pattern: ^[A-Fa-f0-9]{64}$
                 author_id:
                   type: integer
                   minimum: 1
@@ -517,6 +550,9 @@ paths:
                   items:
                     type: integer
                 featured_media:
+                  type: integer
+                  minimum: 0
+                featured_image_id:
                   type: integer
                   minimum: 0
                 author_id:
@@ -829,6 +865,9 @@ paths:
                 featured_media:
                   type: integer
                   minimum: 0
+                featured_image_id:
+                  type: integer
+                  minimum: 0
                 author_id:
                   type: integer
                   minimum: 1
@@ -908,6 +947,21 @@ paths:
                 featured_media:
                   type: integer
                   minimum: 0
+                featured_image_id:
+                  type: integer
+                  minimum: 0
+                alps:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    large_banner:
+                      type: string
+                      enum: [none, hero_50_50, image_text_overlay]
+                    hide_featured_image:
+                      type: boolean
+                expected_alps_sha256:
+                  type: string
+                  pattern: ^[A-Fa-f0-9]{64}$
                 author_id:
                   type: integer
                   minimum: 1
@@ -963,6 +1017,9 @@ paths:
                 template:
                   type: string
                 featured_media:
+                  type: integer
+                  minimum: 0
+                featured_image_id:
                   type: integer
                   minimum: 0
                 author_id:
@@ -3465,6 +3522,137 @@ paths:
       responses:
         '200':
           description: Privacy-filtered author record.
+  /v1/editorial/bulk/prepare:
+    post:
+      operationId: prepareBulkOperation
+      summary: Preview a bounded bulk editorial operation.
+      description: Builds a frozen, read-only plan for featured-image and ALPS updates. It requires at least one selection filter and makes no WordPress writes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [scope, operations, idempotency_key]
+              properties:
+                idempotency_key:
+                  type: string
+                  minLength: 8
+                  maxLength: 200
+                  pattern: ^[A-Za-z0-9._:-]+$
+                scope:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    post_type: {type: string, maxLength: 20, description: post, page, or an allowlisted custom post type.}
+                    category: {type: string, maxLength: 200}
+                    tag: {type: string, maxLength: 200}
+                    category_ids: {type: array, minItems: 1, maxItems: 2000, items: {type: integer, minimum: 1}}
+                    tag_ids: {type: array, minItems: 1, maxItems: 2000, items: {type: integer, minimum: 1}}
+                    post_ids: {type: array, minItems: 1, maxItems: 2000, items: {type: integer, minimum: 1}}
+                    status: {type: string, enum: [publish, draft, pending, private, future]}
+                    author_id: {type: integer, minimum: 1}
+                    has_featured_image: {type: boolean}
+                    alps:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        large_banner: {type: string, enum: [none, hero_50_50, image_text_overlay]}
+                        hide_featured_image: {type: boolean}
+                    published_after: {type: string, maxLength: 40}
+                    published_before: {type: string, maxLength: 40}
+                    modified_after: {type: string, maxLength: 40}
+                    modified_before: {type: string, maxLength: 40}
+                operations:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    featured_image:
+                      type: object
+                      additionalProperties: false
+                      required: [strategy]
+                      properties:
+                        strategy: {type: string, enum: [existing_featured_image, first_content_image, first_media_attachment, explicit_media_id, per_post_mapping]}
+                        only_if_missing: {type: boolean, default: true}
+                        media_id: {type: integer, minimum: 1}
+                        per_post_mapping: {type: object, additionalProperties: {type: integer, minimum: 1}}
+                    alps:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        large_banner: {type: string, enum: [none, hero_50_50, image_text_overlay]}
+                        hide_featured_image: {type: boolean}
+                        overwrite: {type: boolean, default: true}
+      responses:
+        '200': {description: Frozen preview plan; no WordPress writes were made.}
+        '400': {description: Invalid scope or operation settings.}
+        '409': {description: Idempotency key conflict.}
+  /v1/editorial/bulk/{operation_id}/execute:
+    post:
+      operationId: executeBulkOperation
+      summary: Execute one approved bulk-operation chunk.
+      description: Applies only the frozen plan items in this chunk, with version and ALPS conflict checks and per-item outcomes.
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {type: string, pattern: '^bulk_[0-9a-f-]{36}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm, idempotency_key]
+              properties:
+                confirm: {type: string, enum: [APPLY_BULK_OPERATION]}
+                idempotency_key: {type: string, minLength: 8, maxLength: 200, pattern: '^[A-Za-z0-9._:-]+$'}
+                chunk_size: {type: integer, minimum: 1, maximum: 50, default: 25}
+      responses:
+        '200': {description: Chunk completed or operation already complete.}
+        '206': {description: Chunk completed; execute again to continue.}
+        '409': {description: Confirmation, stale-operation, or idempotency conflict.}
+  /v1/editorial/bulk/{operation_id}:
+    get:
+      operationId: getBulkOperationStatus
+      summary: Read bulk-operation status and item outcomes.
+      description: Returns the frozen plan, progress counts, conflicts, failures, audit data, and rollback outcomes without writing to WordPress.
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {type: string, pattern: '^bulk_[0-9a-f-]{36}$'}
+      responses:
+        '200': {description: Bulk-operation status.}
+        '404': {description: Operation not found or expired.}
+  /v1/editorial/bulk/{operation_id}/rollback:
+    post:
+      operationId: rollbackBulkOperation
+      summary: Roll back changed items from a completed bulk operation.
+      description: Restores only items changed by the operation, using conflict checks so later manual edits are never overwritten.
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema: {type: string, pattern: '^bulk_[0-9a-f-]{36}$'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm, idempotency_key]
+              properties:
+                confirm: {type: string, enum: [ROLLBACK_BULK_OPERATION]}
+                idempotency_key: {type: string, minLength: 8, maxLength: 200, pattern: '^[A-Za-z0-9._:-]+$'}
+                chunk_size: {type: integer, minimum: 1, maximum: 50, default: 25}
+      responses:
+        '200': {description: Rollback completed.}
+        '206': {description: Rollback chunk completed; call again to continue.}
+        '409': {description: Operation is not complete or a rollback conflict occurred.}
   /v1/editorial/bulk-edit:
     post:
       operationId: bulkEditEditorialMetadata

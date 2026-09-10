@@ -20,6 +20,9 @@ for (const required of [
   "ALLOW_LIVE_EDITS",
   "RESTORE_ACTIVITY",
   "APPLY_BULK_EDIT",
+  "prepareBulkOperation",
+  "APPLY_BULK_OPERATION",
+  "alps_sha256",
   "untrusted",
 ]) {
   if (!text.includes(required)) {

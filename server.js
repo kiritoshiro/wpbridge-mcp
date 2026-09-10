@@ -10,6 +10,7 @@ import { loadConfig, loadEnvFile } from "./lib/config.js";
 import { createRouteHandler } from "./lib/handlers.js";
 import { writeBridgeError } from "./lib/http.js";
 import { createFileIdempotencyStore } from "./lib/idempotency.js";
+import { createFileBulkOperationStore } from "./lib/bulk-operations.js";
 import { createWordPressClient } from "./lib/wordpress.js";
 
 loadEnvFile();
@@ -34,7 +35,12 @@ const activity = createFileActivityStore({
   retentionMs: cfg.activityRetentionDays * 24 * 60 * 60 * 1000,
   maxRecords: cfg.activityMaxRecords,
 });
-const route = createRouteHandler({ cfg, wordpress, security, idempotency, activity });
+const bulkOperations = createFileBulkOperationStore({
+  filePath: cfg.bulkOperationStorePath,
+  retentionMs: cfg.bulkOperationRetentionHours * 60 * 60 * 1000,
+  maxRecords: cfg.bulkOperationMaxRecords,
+});
+const route = createRouteHandler({ cfg, wordpress, security, idempotency, activity, bulkOperations });
 
 const server = http.createServer(async (req, res) => {
   const started = Date.now();
@@ -88,4 +94,5 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`Live edits enabled: ${cfg.allowLiveEdits}`);
   console.log(`Idempotency store: ${idempotency.stats().file}`);
   console.log(`Activity store: ${activity.stats().file}`);
+  console.log(`Bulk operation store: ${bulkOperations.stats().file}`);
 });

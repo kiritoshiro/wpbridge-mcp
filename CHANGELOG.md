@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an optional ALPS helper adapter for normalized featured-image layout/hide fields, expose featured-image summaries and `featured_image_id` aliases, and add frozen, filtered, chunked bulk plans with conflict-guarded execution and rollback.
+- Keep the grouped GPT schema at 13 operations while adding typed bulk prepare/execute/status/rollback actions and concise ALPS/bulk guidance under the 8,000-character instruction limit.
 - Add typed, bounded category/tag, parent, attachment, author, exact-ID, date, MIME, sticky, taxonomy-relation, and ordering filters to existing post/page/media/custom-item list actions; request summary fields only for smaller responses.
 - Fall back to bounded, same-origin Sharp processing when WordPress recognizes an attachment but its native image editor cannot open the local JPEG, PNG, or WebP file; upload a MIME-extension-correct new derivative and preserve the original.
 - Add idempotent, version-checked image rotation, flip, and percentage crop through WordPress's native media editor; transforms create a new attachment and preserve the original.

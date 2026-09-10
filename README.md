@@ -1,7 +1,7 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-82 grouped editorial capabilities through 12 grouped operations plus one direct
+86 grouped editorial capabilities through 12 grouped operations plus one direct
 conversation-image uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
@@ -27,6 +27,28 @@ content through a **private Custom GPT Action**.
 - Preview proposed title/content/slug/parent/menu-order/template/author/featured-media changes without writing
 - Edit title/content/slug/parent/menu order/template/featured media only with a current `modified_gmt` or `content_sha256`
 - Optional, separately gated publish/unpublish/schedule actions
+
+### ALPS featured-image presentation
+- Reads expose the normalized `featured_image` summary and, when the optional
+  helper plugin is installed, ALPS `large_banner` and `hide_featured_image`
+  fields with an `alps_sha256` optimistic-lock fingerprint.
+- Post/page edits accept the stable `featured_image_id` alias and fixed ALPS
+  fields only; ALPS writes require the current `expected_alps_sha256`.
+- Install `wordpress/wpbridge-alps-helper` on an ALPS site to map the public
+  values to the theme's `_featured_image_hero_layout` and `_hide_featured_image`
+  keys. The helper never exposes arbitrary post meta.
+
+### Prepared bulk editorial operations
+- `prepareBulkOperation` requires an explicit category/tag/ID/status/author/date,
+  featured-image, or ALPS filter and creates a frozen, read-only plan.
+- Featured-image strategies include an existing image, first Gutenberg/content
+  image, first attached media, explicit media ID, or a bounded per-post mapping;
+  missing images can be skipped without blocking unrelated ALPS changes.
+- `executeBulkOperation` applies bounded chunks with version/ALPS conflict checks,
+  per-item isolation, idempotent retries, and activity audit records. A completed
+  operation can be rolled back with the same conflict guards.
+- Plans and results persist in `.data/bulk-operations.json` with configurable
+  retention, record/item caps, chunk size, and large-job threshold.
 
 ### Gutenberg block editing
 - List top-level Gutenberg blocks for posts and pages
@@ -271,7 +293,7 @@ plugins.
 
 ## Configuration and live-edit safety
 
-- Numeric settings (`PORT`, `MAX_BODY_BYTES`, `MAX_MEDIA_BYTES`, `RATE_LIMIT_PER_MINUTE`, `IDEMPOTENCY_RETENTION_HOURS`, `IDEMPOTENCY_MAX_RECORDS`, `AUDIT_DEADLINE_MS`, `AUDIT_CONCURRENCY`, `ACTIVITY_RETENTION_DAYS`, and `ACTIVITY_MAX_RECORDS`) are validated strictly at startup; malformed or out-of-range values stop the bridge instead of being silently clamped.
+- Numeric settings (`PORT`, `MAX_BODY_BYTES`, `MAX_MEDIA_BYTES`, `RATE_LIMIT_PER_MINUTE`, `IDEMPOTENCY_RETENTION_HOURS`, `IDEMPOTENCY_MAX_RECORDS`, `AUDIT_DEADLINE_MS`, `AUDIT_CONCURRENCY`, `ACTIVITY_RETENTION_DAYS`, `ACTIVITY_MAX_RECORDS`, and `BULK_OPERATION_*`) are validated strictly at startup; malformed or out-of-range values stop the bridge instead of being silently clamped.
 - `HOST` defaults to `127.0.0.1`. Binding to a non-loopback address requires the explicit `ALLOW_EXTERNAL_ACCESS=true` opt-in.
 - `WP_URL` preserves an installation subdirectory, so `https://example.org/wordpress` targets `https://example.org/wordpress/wp-json/...` rather than the domain root.
 - Forwarded client-IP headers are ignored unless the direct peer IP is listed in `TRUSTED_PROXY_IPS`. This affects rate-limit attribution only, never authentication.
@@ -310,6 +332,8 @@ v1.12.0+ separates the bridge runtime into independently testable modules:
 - `lib/preview.js` — signed preview tokens and bounded field/content diffs
 - `lib/idempotency.js` — persisted duplicate-prevention outcomes and request fingerprints
 - `lib/activity.js` — privacy-filtered activity history, persistence, retention, and mutation classification
+- `lib/bulk-operations.js` — bounded frozen-plan storage and resumable bulk state
+- `wordpress/wpbridge-alps-helper` — optional fixed-key ALPS REST adapter
 - `lib/concurrency.js` — bounded deadline-aware work scheduling for audits
 - `lib/wordpress.js` — constrained WordPress/SEO/media HTTP client
 - `lib/handlers.js` — implemented bridge endpoint handlers
@@ -319,7 +343,7 @@ v1.12.0+ separates the bridge runtime into independently testable modules:
 Run `npm run check` for syntax validation, `npm test` for the automated suite,
 and `npm run check:openapi` after rendering the schema. The OpenAPI check compares
 the documented method/path set with all annotated implemented handlers and currently
-verifies all 83 operations. CI performs syntax checks, tests, schema rendering, and
+verifies all 87 operations. CI performs syntax checks, tests, schema rendering, and
 the implementation/schema comparison on pushes and pull requests.
 
 WordPress transport failures are normalized. Read-only network failures return `502 wordpress_unreachable` and read-only upstream deadlines return `504 wordpress_timeout`. For mutating requests, a network loss or timeout after the request may have been sent is reported separately as an **unknown write outcome** (`wordpress_write_network_outcome_unknown` / `wordpress_write_timeout_outcome_unknown`) so callers do not mistake it for a definite failure and retry blindly. Raw network exception details are not returned to callers.

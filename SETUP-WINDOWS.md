@@ -105,7 +105,15 @@ IMAGE_OPTIMIZE_MAX_DIMENSION=1920
 IMAGE_OPTIMIZE_QUALITY=82
 MAX_ARCHIVE_ENTRIES=1000
 MAX_EXTRACTED_IMAGES=50
+BULK_OPERATION_MAX_ITEMS=2000
+BULK_OPERATION_LARGE_THRESHOLD=100
+BULK_OPERATION_CHUNK_SIZE=25
 ```
+
+For ALPS sites, copy `wordpress/wpbridge-alps-helper/wpbridge-alps-helper.php`
+to `wp-content/plugins/wpbridge-alps-helper/`, activate it, and keep the
+default ALPS fields exposed by the helper. It maps WPBridge's normalized
+`large_banner`/`hide_featured_image` values to the theme's fixed meta keys.
 
 Custom post types, custom fields, and custom taxonomies are disabled by default. To enable only
 specific custom content, add explicit allowlists. For example:

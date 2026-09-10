@@ -5,7 +5,7 @@ Run `npm ci` after updating, then restart the bridge. Set `PUBLIC_BASE_URL` in
 Import **openapi.gpt.yaml** in the Custom GPT editor and refresh its instructions
 from GPT-INSTRUCTIONS.txt. Keep bearer API-key authentication configured.
 
-The generated GPT schema has 12 grouped operations representing 82 restricted actions,
+The generated GPT schema has 12 grouped operations representing 86 restricted actions,
 plus the direct conversation-file upload operation.
 The full `openapi.template.yaml` and `openapi.generated.yaml` still describe the
 original REST endpoints. No original endpoint has been removed.
@@ -23,6 +23,12 @@ POST `/gpt/contentCreate`:
 ```json
 {"action":"createDraft","body":{"title":"Example draft","idempotency_key":"example-draft-001"}}
 ```
+
+For a multi-item featured-image or ALPS change, use the editorial group in
+three guarded calls: `prepareBulkOperation` with explicit `scope` filters,
+`executeBulkOperation` with `confirm: "APPLY_BULK_OPERATION"` (repeat while
+the status is `206`), then `getBulkOperationStatus`. A completed plan can be
+rolled back only with explicit `ROLLBACK_BULK_OPERATION` confirmation.
 
 Action names are fixed, and must belong to the selected group. URLs and methods
 cannot be supplied. Path values cannot contain separators or traversal. All
