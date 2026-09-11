@@ -34,6 +34,9 @@ content through a **private Custom GPT Action**.
   fields with an `alps_sha256` optimistic-lock fingerprint.
 - Post/page edits accept the stable `featured_image_id` alias and fixed ALPS
   fields only; ALPS writes require the current `expected_alps_sha256`.
+- When the helper is installed, reads use the helper's own `alps_sha256` as the
+  authoritative fingerprint. REST meta normalization is used only as the
+  documented fallback when the helper route is unavailable.
 - Install `wordpress/wpbridge-alps-helper` on an ALPS site to map the public
   values to the theme's `_featured_image_hero_layout` and `_hide_featured_image`
   keys. The helper never exposes arbitrary post meta.

@@ -138,6 +138,9 @@ test("ALPS helper fields are exposed on reads and protected by an ALPS fingerpri
     id: 42, status: "draft", modified_gmt: "2026-09-08T08:30:00Z", featured_media: 77,
     title: { raw: "ALPS post", rendered: "ALPS post" }, content: { raw: "Body", rendered: "Body" },
     excerpt: { raw: "", rendered: "" }, categories: [], tags: [],
+    // Deliberately expose equivalent REST meta with a different locally
+    // derived representation. The installed helper's fingerprint must win.
+    meta: { _featured_image_hero_layout: "false", _hide_featured_image: "" },
   };
   let helperWrites = 0;
   const wordpress = {

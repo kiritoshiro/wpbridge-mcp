@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use the installed ALPS helper's canonical fingerprint for reads and writes,
+  preventing false `alps_edit_conflict` results when REST meta encodings differ.
 - Document the reliable large-category workflow: list newest posts in pages of
   50 and process explicit post-ID batches newest-to-oldest.
 - Bound large post/page/custom-content reads and Gutenberg block indexes to
