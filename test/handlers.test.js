@@ -969,6 +969,109 @@ test("Gutenberg paragraph replacement uses the current content hash and preserve
   });
 });
 
+test("large post reads stay bounded while block pages retain the full edit hash", async () => {
+  const paragraph = (text) => `<!-- wp:paragraph --><p>${text}</p><!-- /wp:paragraph -->`;
+  const content = [paragraph("A".repeat(2_400)), paragraph("B".repeat(2_400)), paragraph("C".repeat(2_400))].join("\n\n");
+  const current = {
+    id: 8440,
+    status: "publish",
+    modified_gmt: "2026-09-08T12:00:00",
+    link: "https://example.test/biblijos-istorija/",
+    title: { raw: "Biblijos istorija", rendered: "Biblijos istorija" },
+    content: { raw: content, rendered: `<p>${"long page"}</p>` },
+    excerpt: { raw: "", rendered: "" },
+    categories: [],
+    tags: [],
+    featured_media: 0,
+  };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      assert.equal(path, "/wp-json/wp/v2/posts/8440?context=edit");
+      return { data: current, headers: new Headers() };
+    },
+  };
+
+  await withBridge({ wordpress, cfg: baseConfig({ maxContentResponseChars: 1_200 }) }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}` };
+    const detailsResponse = await fetch(`${base}/v1/posts/8440`, { headers });
+    const details = await detailsResponse.json();
+    assert.equal(detailsResponse.status, 200);
+    assert.equal(details.id, 8440);
+    assert.equal(details.content.raw.length, 1_200);
+    assert.equal(details.content.rendered, "");
+    assert.equal(details.content_truncated, true);
+    assert.equal(details.content_length, content.length);
+    assert.equal(details.content_offset, 0);
+    assert.equal(details.content_next_offset, 1_200);
+    assert.match(details.content_sha256, /^[a-f0-9]{64}$/);
+
+    const nextResponse = await fetch(`${base}/v1/posts/8440?content_offset=1200&content_limit=600`, { headers });
+    const next = await nextResponse.json();
+    assert.equal(nextResponse.status, 200);
+    assert.equal(next.content.raw, content.slice(1_200, 1_800));
+    assert.equal(next.content_has_more, true);
+    assert.equal(next.content_sha256, details.content_sha256);
+
+    const blocksResponse = await fetch(`${base}/v1/posts/8440/blocks?limit=1`, { headers });
+    const blocks = await blocksResponse.json();
+    assert.equal(blocksResponse.status, 200);
+    assert.equal(blocks.block_count, 3);
+    assert.equal(blocks.returned, 1);
+    assert.equal(blocks.has_more, true);
+    assert.equal(blocks.next_offset, 1);
+    assert.equal(Object.hasOwn(blocks.blocks[0], "serialized"), false);
+    assert.equal(blocks.content_sha256, details.content_sha256);
+
+    const markupResponse = await fetch(`${base}/v1/posts/8440/blocks?offset=1&limit=1&include_markup=true`, { headers });
+    const markup = await markupResponse.json();
+    assert.equal(markupResponse.status, 200);
+    assert.equal(markup.returned, 1);
+    assert.match(markup.blocks[0].serialized, /B{10}/);
+
+    const oversizedMarkup = await fetch(`${base}/v1/posts/8440/blocks?limit=2&include_markup=true`, { headers });
+    assert.equal(oversizedMarkup.status, 413);
+    assert.equal((await oversizedMarkup.json()).error, "block_markup_response_too_large");
+  });
+});
+
+test("grouped contentRead exposes bounded getPost windows", async () => {
+  const content = "x".repeat(3_000);
+  const current = {
+    id: 8440,
+    status: "publish",
+    modified_gmt: "2026-09-08T12:00:00",
+    title: { raw: "Biblijos istorija", rendered: "Biblijos istorija" },
+    content: { raw: content, rendered: "<p>long page</p>" },
+    excerpt: { raw: "", rendered: "" },
+    categories: [],
+    tags: [],
+  };
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (path) => {
+      assert.equal(path, "/wp-json/wp/v2/posts/8440?context=edit");
+      return { data: current, headers: new Headers() };
+    },
+  };
+  await withBridge({ wordpress, cfg: baseConfig({ maxContentResponseChars: 1_200 }) }, async (base) => {
+    const response = await fetch(`${base}/gpt/contentRead`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "getPost",
+        path: { post_id: 8440 },
+        query: { content_offset: 1_000, content_limit: 500 },
+      }),
+    });
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(result.content.raw, content.slice(1_000, 1_500));
+    assert.equal(result.content_offset, 1_000);
+    assert.equal(result.content_limit, 500);
+  });
+});
+
 
 test("post preview is read-only and highlights live content", async () => {
   let writes = 0;

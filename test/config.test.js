@@ -145,6 +145,19 @@ test("conversation image limits and optimization settings are bounded and consis
   assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", IMAGE_OPTIMIZE_THRESHOLD_BYTES: "30000000" }), /must not exceed MAX_SOURCE_IMAGE_BYTES/);
 });
 
+test("large content response limit is bounded and configurable", () => {
+  const base = {
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  };
+  const cfg = loadConfig({ ...base, MAX_CONTENT_RESPONSE_CHARS: "32000" });
+  assert.equal(cfg.maxContentResponseChars, 32_000);
+  assert.throws(() => loadConfig({ ...base, MAX_CONTENT_RESPONSE_CHARS: "3999" }), /MAX_CONTENT_RESPONSE_CHARS must/);
+  assert.throws(() => loadConfig({ ...base, MAX_CONTENT_RESPONSE_CHARS: "200001" }), /MAX_CONTENT_RESPONSE_CHARS must/);
+});
+
 
 test("default author accepts a positive user ID or exact name/slug", () => {
   assert.deepEqual(parseDefaultAuthor("42"), { kind: "id", value: 42, raw: "42" });

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound large post/page/custom-content reads and Gutenberg block indexes to
+  paginated windows while preserving the full content hash required for safe edits.
 - Fix category-only query serialization so empty `tags` parameters are omitted; add a safe fallback for fixed, REST-exposed ALPS meta when the helper write route is unavailable.
 - Make combined featured-image plus ALPS edits roll back a completed featured-image write when ALPS cannot be applied, and report rollback/partial-update state explicitly.
 - Register the ALPS helper write route explicitly for `POST` compatibility with older WordPress REST servers.

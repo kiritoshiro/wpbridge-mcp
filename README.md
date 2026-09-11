@@ -359,6 +359,15 @@ Supply that exact value to the matching edit operation. The bridge fetches the
 content again immediately before writing and returns HTTP `409 content_changed`
 if the fingerprint no longer matches.
 
+Block reads are bounded by default: responses include `offset`, `limit`,
+`returned`, `has_more`, and `next_offset`, and omit full serialized markup.
+Request a small window with `include_markup=true` when the complete markup for
+specific blocks is needed. Detail reads (`getPost`, `getPage`, and custom-item
+reads) similarly window unusually large raw bodies and always return the full
+`content_sha256`; use `content_offset` and `content_limit` to retrieve later
+windows. A partial content window must not be sent as a full replacement—use
+the block edit action with the hash instead.
+
 This is an optimistic lock: it prevents an edit planned against an older copy
 from silently overwriting a newer WordPress edit. If the item is already published,
 `ALLOW_LIVE_EDITS=true` is also required.

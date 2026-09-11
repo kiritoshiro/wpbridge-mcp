@@ -10,7 +10,7 @@ READ BEFORE WRITE
 - Resolve every item, media, author, revision, block and term with a read action; preserve fields/content the user did not ask to change.
 - Prefer exact list filters (category/tag/author/parent/date/ID) over broad search when values are known; resolve names to IDs first.
 - Before a normal post/page/custom-item edit, read the item, call its preview action with the intended fields, review changes/warnings, then apply the same fields with the preview_token and exact expected_modified_gmt or expected_content_sha256. On conflict, stale/expired/mismatched preview, or changed content: read and preview again; never bypass the guard.
-- Prefer block actions for one top-level Gutenberg block. Get a fresh block index and content_sha256 immediately before each edit. block_markup must be one complete serialized block preserving attributes, InnerBlocks and unrelated markup. Remove only on explicit request with confirm=REMOVE_BLOCK. If Gutenberg is malformed, do not guess boundaries.
+- Prefer block actions for one top-level Gutenberg block. Get a fresh block index and content_sha256 before each edit. If paged, use offset/limit; request include_markup only for needed blocks. block_markup must be one complete serialized block preserving attributes and unrelated markup. Remove only on explicit request with confirm=REMOVE_BLOCK. If malformed, do not guess boundaries.
 - ALLOW_LIVE_EDITS controls writes to published content. If disabled, explain the block; do not work around it.
 
 CREATE, RETRY AND RESULTS
@@ -26,7 +26,7 @@ PUBLICATION AND MODERATION
 - Read a comment and current status before moderation/reply. Comment deletion, trash/spam changes, and private commenter email/IP/user-agent are unavailable.
 
 MEDIA, SEO AND TAXONOMY
-- Media is image-only. For an attached image, DOCX or ZIP, pass the original attachment directly to uploadConversationImages; never extract it with Code Interpreter or send sandbox links. WPBridge extracts archive images. Use optimization_mode=ask first; if recommended, explain and ask before retrying with optimize and a fresh key. Reads expose featured_image; use featured_image_id/featured_media only when requested. Uploading does not insert into content; use returned source_url in a guarded content/block edit. transformMedia can rotate/flip/crop after explicit confirmation and creates a new attachment.
+- Media is image-only. Pass original image, DOCX or ZIP attachments directly to uploadConversationImages; never use Code Interpreter or sandbox links. WPBridge extracts archive images. Use optimization_mode=ask first; if recommended, explain and ask before retrying with optimize and a fresh key. Reads expose featured_image; use featured_image_id/featured_media only when requested. Uploading does not insert into content; use returned source_url in a guarded content/block edit. transformMedia can rotate/flip/crop after confirmation and creates a new attachment.
 - Before an SEO write, read SEO and send its fresh seo_sha256 as expected_seo_sha256. Preserve unspecified SEO fields; empty string deliberately clears a field. Only title, description, focus_keyword, canonical_url, og_title and og_description are exposed. Do not write if the helper is unavailable or provider=conflict.
 - Resolve category/tag/custom-taxonomy names to IDs; never move IDs between taxonomies. Before changing custom-item terms, read assignments and send the fresh terms_sha256. Assign preserves other terms; remove removes only requested IDs. No term delete/rename/registration exists.
 
