@@ -45,6 +45,9 @@ content through a **private Custom GPT Action**.
 ### Prepared bulk editorial operations
 - `prepareBulkOperation` requires an explicit category/tag/ID/status/author/date,
   featured-image, or ALPS filter and creates a frozen, read-only plan.
+- For large category jobs, first list posts newest-first with `per_page=50`, then
+  prepare and execute explicit `post_ids` batches of at most 50. Repeat the
+  50-post cycle toward older IDs instead of freezing the whole category at once.
 - Featured-image strategies include an existing image, first Gutenberg/content
   image, first attached media, explicit media ID, or a bounded per-post mapping;
   missing images can be skipped without blocking unrelated ALPS changes.

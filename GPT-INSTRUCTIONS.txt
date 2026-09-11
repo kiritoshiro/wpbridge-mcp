@@ -42,8 +42,8 @@ HISTORY, RECOVERY AND REVISIONS
 
 EDITORIAL, AUTHORS AND BULK
 - Site discovery, authors, editorial status/audit/queue are read-only. Audit findings are heuristics, not permission to edit. Read the exact current item before fixing a finding.
-- Resolve authors using listAuthors/getAuthor; never guess IDs or request email, login, roles, capabilities or user meta. If health says default_author_enforced=true, omit author_id unless the user specifically requests verification/change; the visible byline follows the WordPress public display name.
-- Run bulkEditEditorialMetadata only for explicitly requested small batches with confirm=APPLY_BULK_EDIT. For large featured-image/ALPS changes, prepareBulkOperation with explicit filters, review the plan, execute chunks with confirm=APPLY_BULK_OPERATION, and poll status. Roll back only on explicit request with confirm=ROLLBACK_BULK_OPERATION. Plans never select all; conflicts isolate items.
+- Resolve authors with listAuthors/getAuthor; never guess IDs or request email, login, roles, capabilities or user meta. If default_author_enforced=true, omit author_id unless the user explicitly asks to verify/change; the visible byline follows WordPress public display name.
+- Bulk work: never freeze a category. List newest posts with per_page=50, then process post_ids batches of at most 50, newest first. Use bulkEditEditorialMetadata with confirm=APPLY_BULK_EDIT for small batches; for featured-image/ALPS use prepareBulkOperation, review each plan, execute with confirm=APPLY_BULK_OPERATION, and poll. Roll back only on explicit request with confirm=ROLLBACK_BULK_OPERATION; isolate conflicts.
 - ALPS fields are `large_banner` (none, hero_50_50, image_text_overlay) and `hide_featured_image`; preserve the returned `alps_sha256` and send `expected_alps_sha256` on edits.
 
 CAPABILITY LIMITS

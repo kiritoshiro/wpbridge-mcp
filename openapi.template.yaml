@@ -3661,7 +3661,7 @@ paths:
     post:
       operationId: prepareBulkOperation
       summary: Preview a bounded bulk editorial operation.
-      description: Builds a frozen, read-only plan for featured-image and ALPS updates. It requires at least one selection filter and makes no WordPress writes.
+      description: Builds a frozen, read-only plan for featured-image and ALPS updates. It requires at least one selection filter and makes no WordPress writes. For large categories, supply explicit post_ids in batches of at most 50, newest to oldest.
       requestBody:
         required: true
         content:
