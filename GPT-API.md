@@ -6,7 +6,9 @@ Import **openapi.gpt.yaml** in the Custom GPT editor and refresh its instruction
 from GPT-INSTRUCTIONS.txt. Keep bearer API-key authentication configured.
 
 The generated GPT schema has 12 grouped operations representing 86 restricted actions,
-plus the direct conversation-file upload operation.
+plus the direct conversation-media upload operation. That action accepts
+validated images, common audio, PDF, DOCX, and ZIP attachments; only images are
+eligible for optional resize/WebP optimization.
 The full `openapi.template.yaml` and `openapi.generated.yaml` still describe the
 original REST endpoints. No original endpoint has been removed.
 

@@ -145,7 +145,7 @@ settings blank until you know the exact slugs you want ChatGPT to access.
 This lets you test reading, draft creation, page editing, Gutenberg block
 editing, revision inspection/restore, Media Library uploads, draft-to-pending
 review workflow, category/tag creation, comment reading, read-only site discovery, allowlisted SEO metadata edits (when the optional helper is installed), and explicitly configured custom content—including custom-item Gutenberg/revision reads, draft-to-pending review, and allowlisted custom-taxonomy term management—without enabling the dedicated visibility-changing actions. `MAX_BODY_BYTES` is larger than
-`MAX_MEDIA_BYTES` because base64 expands image data.
+`MAX_MEDIA_BYTES` because base64 expands media data.
 
 ## 5) Start locally
 
@@ -258,7 +258,7 @@ On ChatGPT web:
 
    Enter only the raw key in the secret field. Do **not** type `Bearer ` yourself;
    ChatGPT adds the `Authorization: Bearer ...` header.
-6. Paste the entire contents of `openapi.gpt.yaml` as the action schema. This generated schema exposes the existing capabilities through 12 grouped operations plus the direct `uploadConversationImages` action—13 operations total, below the editor's 30-operation limit. Restart the updated bridge before importing it. `openapi.generated.yaml` remains the full REST reference and is not the GPT import file.
+6. Paste the entire contents of `openapi.gpt.yaml` as the action schema. This generated schema exposes the existing capabilities through 12 grouped operations plus the direct `uploadConversationImages` action—13 operations total, below the editor's 30-operation limit. The direct action accepts original images, common audio, PDFs, DOCX, and ZIP files. Restart the updated bridge before importing it. `openapi.generated.yaml` remains the full REST reference and is not the GPT import file.
 7. Test `bridgeHealth`, `listPosts`, `listPages`, `listPostBlocks`,
    `listPageRevisions`, `listMedia`, `listComments`, `getSeoCapabilities`, and `getSiteDiscovery` in Preview.
 8. Save the GPT and keep its sharing/access setting **Invite-only/private**.
@@ -303,7 +303,7 @@ Block removal additionally requires the exact confirmation value
 content hash. Restoring a revision does not change status. Published-item edits, including
 revision restore, are blocked while `ALLOW_LIVE_EDITS=false`.
 
-For images, DOCX documents, or ZIP archives attached directly to a GPT conversation,
+For images, audio files, PDFs, DOCX documents, or ZIP archives attached directly to a GPT conversation,
 use `uploadConversationImages`. Images embedded in a DOCX under `word/media/*` and
 supported images stored in a ZIP are extracted automatically without writing archive
 contents to disk. Archive entry, image-count, individual-size, and total-size limits
@@ -313,7 +313,9 @@ its `sandbox:/mnt/data/...` references are private to ChatGPT and cannot be down
 by the external bridge.
 ChatGPT supplies temporary OpenAI file references, so it does not need to place base64
 inside the action call. The bridge accepts only OpenAI's temporary file host and never
-fetches caller-chosen URLs. It supports up to 10 source attachments per call.
+fetches caller-chosen URLs. It supports up to 10 source attachments per call. Audio and
+PDF files are uploaded unchanged after MIME/signature validation; image optimization
+does not alter them.
 
 Use `optimization_mode=ask` first. Web-sized images upload unchanged. If an image is
 larger than the configured byte or dimension threshold, the bridge uploads nothing and
@@ -383,7 +385,7 @@ ACTIVITY_RETENTION_DAYS=30
 ACTIVITY_MAX_RECORDS=2000
 ```
 
-Keep this local file private and persistent if you want recovery records to survive restarts. It does not contain bridge credentials, WordPress Application Passwords, full post bodies, comment bodies, or uploaded image bytes. Content recovery points to WordPress revisions when a matching pre-change revision exists; bounded before-values are kept only for changed metadata that revisions do not cover.
+Keep this local file private and persistent if you want recovery records to survive restarts. It does not contain bridge credentials, WordPress Application Passwords, full post bodies, comment bodies, or uploaded media bytes. Content recovery points to WordPress revisions when a matching pre-change revision exists; bounded before-values are kept only for changed metadata that revisions do not cover.
 
 Keep the store on persistent local disk if you want retry protection to survive a bridge restart. The bridge writes an in-progress marker before each protected WordPress mutation, so a crash/restart during the request is conservatively treated as an unknown outcome instead of automatically resending it. The store writes key hashes rather than plaintext idempotency keys and uses restrictive local file permissions. Do not share one store between unrelated bridge instances unless they intentionally represent the same WordPress target and API.
 

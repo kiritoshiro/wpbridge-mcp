@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Extend conversation and base64 media uploads to validated audio and PDF files,
+  while retaining image optimization and DOCX/ZIP image extraction.
 - Use the installed ALPS helper's canonical fingerprint for reads and writes,
   preventing false `alps_edit_conflict` results when REST meta encodings differ.
 - Document the reliable large-category workflow: list newest posts in pages of

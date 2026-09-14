@@ -2,7 +2,7 @@
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
 86 grouped editorial capabilities through 12 grouped operations plus one direct
-conversation-image uploader. See [GPT API setup](GPT-API.md).
+conversation-media uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
 A deliberately restricted local API bridge for controlling WordPress editorial
@@ -92,7 +92,7 @@ not expose revision deletion.
 ### Activity history and guarded recovery
 - Persist privacy-filtered records for bridge write attempts with action, affected item, time, outcome, HTTP status, and request ID; successful create/upload/reply/term operations attach the returned WordPress object ID when available
 - List recent activity with filters for post type, object ID, outcome, and recoverability
-- Inspect one activity entry without exposing credentials, full post bodies, comment bodies, or uploaded image bytes
+- Inspect one activity entry without exposing credentials, full post bodies, comment bodies, or uploaded media bytes
 - Link content edits to matching WordPress revisions before/after the change when revisions are available
 - Store only bounded before-values for non-revision metadata such as slug, taxonomy IDs, author, featured media, page attributes, allowlisted SEO fields, allowlisted custom fields, and allowlisted custom-taxonomy assignments
 - Record per-item bulk metadata outcomes so successful items can be reviewed/recovered independently
@@ -102,16 +102,16 @@ not expose revision deletion.
 - Recovery writes are themselves recorded, making a restore reviewable and, when sufficient before-state exists, reversible
 - History defaults to `.data/activity.json`, 30 days, and 2000 records (`ACTIVITY_STORE_PATH`, `ACTIVITY_RETENTION_DAYS`, `ACTIVITY_MAX_RECORDS`)
 
-### Image media
-- List/search image attachments in the Media Library
+### Media files
+- List/search Media Library attachments; upload/edit supported images, audio, and PDFs
 - Filter lists by attached post/page, author, MIME type, exact IDs, publication/modification time, and explicit ordering
-- Read image metadata
-- Upload up to 10 images attached to a ChatGPT conversation through temporary OpenAI file references
+- Read supported media metadata
+- Upload up to 10 images, audio files, or PDFs attached to a ChatGPT conversation through temporary OpenAI file references
 - Extract JPEG, PNG, WebP, and GIF images embedded in attached DOCX files or stored in ZIP archives
 - Bound archive entry count, extracted image count, individual size, and total expanded size
 - Recommend no-write resize/WebP optimization for large images and apply it only after approval
 - Download only OpenAI's `oaiusercontent.com` host family with strict MIME, signature, source-size, and batch-size validation
-- Upload JPEG, PNG, WebP, and GIF images from caller-supplied base64 data
+- Upload JPEG, PNG, WebP, GIF, common audio formats, and PDFs from caller-supplied base64 data
 - Require an idempotency key for uploads so exact retries cannot create duplicate attachments
 - Edit title, alt text, caption, description, and attachment parent
 - Create a rotated, horizontally/vertically flipped, and/or percentage-cropped derivative from existing media
@@ -279,7 +279,7 @@ plugins.
 
 ### Persistent idempotency and retry safety
 
-- Duplicate-prone operations require an `idempotency_key` (or equivalent `Idempotency-Key` header): post/page/custom draft creation, image upload, category/tag/custom-taxonomy term creation, and comment replies.
+- Duplicate-prone operations require an `idempotency_key` (or equivalent `Idempotency-Key` header): post/page/custom draft creation, media upload, category/tag/custom-taxonomy term creation, and comment replies.
 - Reusing the same key with the exact same request replays the stored outcome instead of calling WordPress again. Reusing a key for a different payload/operation returns HTTP `409 idempotency_key_reused`.
 - Outcomes persist across bridge restarts in `IDEMPOTENCY_STORE_PATH` (default `.data/idempotency.json`). Before sending the WordPress mutation, the bridge first persists an `in_progress` marker; if the process dies mid-write, a restart treats that key as an unknown outcome rather than sending it again. Plaintext idempotency keys are not written to disk; the store uses key hashes and restrictive filesystem permissions.
 - Store retention defaults to 168 hours and 500 records (`IDEMPOTENCY_RETENTION_HOURS`, `IDEMPOTENCY_MAX_RECORDS`). Oldest/expired records are pruned automatically.
@@ -321,7 +321,7 @@ plugins.
 
 ### Activity-history privacy and recovery model
 
-`ACTIVITY_STORE_PATH` is a separate local store from idempotency outcomes. It is written with restrictive local file permissions and automatically pruned by age/count. The store intentionally rejects arbitrary fields: credentials, bridge/API secrets, full content bodies, comment bodies, and uploaded image bytes are not accepted into activity records. Strings/arrays/objects that are retained as metadata before-values are bounded.
+`ACTIVITY_STORE_PATH` is a separate local store from idempotency outcomes. It is written with restrictive local file permissions and automatically pruned by age/count. The store intentionally rejects arbitrary fields: credentials, bridge/API secrets, full content bodies, comment bodies, and uploaded media bytes are not accepted into activity records. Strings/arrays/objects that are retained as metadata before-values are bounded.
 
 For title/content/excerpt recovery, the bridge first tries to identify a WordPress revision that exactly matches the pre-change state of the revision-covered fields. It stores the revision ID/admin link, not a copy of that content. If no matching revision is available, those content fields are marked unavailable for history recovery rather than copied into the local log. Non-revision metadata stores only the fields actually changed.
 
@@ -404,13 +404,14 @@ content; explicit user intent for the specific revision is still required.
 ## Media upload safety
 
 Custom GPT conversation attachments use the dedicated `uploadConversationImages`
-action. ChatGPT supplies temporary OpenAI file references; the bridge downloads
-only OpenAI's `oaiusercontent.com` host family, validates and decodes each image, and then
-uploads it to WordPress. The action also accepts DOCX and ZIP attachments. DOCX
-processing reads supported images only from `word/media/*`; ZIP processing finds
-supported images anywhere in the archive. Archives are processed in memory with
-entry-count and expanded-size limits and are never extracted to disk. The original
-`/v1/media` base64 endpoint remains available for direct API clients.
+action (the name is retained for backwards compatibility). ChatGPT supplies temporary
+OpenAI file references; the bridge downloads only OpenAI's `oaiusercontent.com` host
+family, validates each image/audio/PDF signature, and uploads it to WordPress. The
+action also accepts DOCX and ZIP attachments. DOCX processing reads supported images
+only from `word/media/*`; ZIP processing finds supported images anywhere in the
+archive. Archives are processed in memory with entry-count and expanded-size limits
+and are never extracted to disk. The original `/v1/media` base64 endpoint also accepts
+the supported audio and PDF types for direct API clients.
 
 `transformMedia` first uses WordPress's native media editor to create a new derivative. If
 WordPress cannot open its local image file, the bridge can fall back to downloading only
@@ -427,12 +428,20 @@ Pass the original conversation attachment to the action. A `sandbox:/mnt/data/..
 reference created by Code Interpreter exists only inside ChatGPT's sandbox and is
 not downloadable by WPBridge; the bridge returns a specific error for this case.
 
-Supported types:
+Supported conversation media types:
 
 - `image/jpeg`
 - `image/png`
 - `image/webp`
 - `image/gif`
+- `audio/mpeg`
+- `audio/wav` / `audio/x-wav`
+- `audio/ogg` / `audio/opus`
+- `audio/mp4` / `audio/x-m4a`
+- `audio/flac`
+- `audio/aac`
+- `audio/webm`
+- `application/pdf`
 
 For a large image, the default `optimization_mode=ask` returns a recommendation
 without uploading anything. After the user approves, retrying with

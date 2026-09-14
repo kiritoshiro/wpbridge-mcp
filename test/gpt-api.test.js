@@ -57,7 +57,11 @@ test("GPT schema has 12 grouped operations plus direct conversation-file upload"
   assert.deepEqual(actions.sort(), groupedIds.sort());
   const direct = schema.paths["/gpt/uploadConversationImages"].post;
   assert.equal(direct.operationId, "uploadConversationImages");
-  assert.equal(direct.requestBody.content["application/json"].schema.properties.openaiFileIdRefs.items.type, "string");
+  const fileRef = direct.requestBody.content["application/json"].schema.properties.openaiFileIdRefs.items;
+  assert.equal(fileRef.type, "object");
+  assert.deepEqual(fileRef.required, ["id", "name", "mime_type", "download_link"]);
+  assert.equal(fileRef.properties.mime_type.enum.includes("audio/mpeg"), true);
+  assert.equal(fileRef.properties.mime_type.enum.includes("application/pdf"), true);
   assertObjectSchemasHaveProperties(direct.requestBody.content["application/json"].schema, "uploadConversationImages");
 });
 

@@ -511,6 +511,33 @@ test("media endpoint rejects unsupported uploads before calling WordPress", asyn
   });
 });
 
+test("media endpoint accepts PDF and audio base64 uploads", async () => {
+  const pdf = Buffer.from("%PDF-1.7\n%%EOF\n");
+  const uploads = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpImageUpload: async (filename, mimeType, data) => {
+      uploads.push({ filename, mimeType, data });
+      return { id: 120, media_type: "file", mime_type: mimeType, source_url: `https://example.test/${filename}` };
+    },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const response = await fetch(`${base}/v1/media`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "book.pdf",
+        mime_type: "application/pdf",
+        data_base64: pdf.toString("base64"),
+        idempotency_key: "pdf-base64-upload-120",
+      }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).id, 120);
+    assert.deepEqual(uploads, [{ filename: "book.pdf", mimeType: "application/pdf", data: pdf }]);
+  });
+});
+
 test("media transform creates a rotated derivative and replays without duplicating it", async () => {
   const activity = createMemoryActivityStore();
   let reads = 0;
@@ -786,6 +813,80 @@ test("GPT conversation images require optimization approval, then resize to WebP
   });
 });
 
+test("GPT conversation uploads accept validated audio and PDF attachments", async () => {
+  const wav = Buffer.alloc(44);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36, 4);
+  wav.write("WAVE", 8, "ascii");
+  wav.write("fmt ", 12, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(44100, 24);
+  wav.writeUInt32LE(88200, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii");
+  const pdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const uploaded = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpImageUpload: async (filename, mimeType, data) => {
+      uploaded.push({ filename, mimeType, data });
+      return { id: 100 + uploaded.length, media_type: mimeType === "application/pdf" ? "file" : "audio", mime_type: mimeType, source_url: `https://example.test/${filename}`, media_details: { filesize: data.length } };
+    },
+  };
+  const fetchImpl = async (url) => {
+    const data = String(url).includes("sermon") ? wav : pdf;
+    const mimeType = String(url).includes("sermon") ? "audio/wav" : "application/pdf";
+    return new Response(data, { status: 200, headers: { "content-type": mimeType, "content-length": String(data.length) } });
+  };
+  const refs = [
+    { name: "sermon.wav", id: "file_audio123", mime_type: "audio/wav", download_link: "https://sdmntprcentralus.oaiusercontent.com/sermon.wav?sig=1" },
+    { name: "book.pdf", id: "file_pdf123", mime_type: "application/pdf", download_link: "https://sdmntprcentralus.oaiusercontent.com/book.pdf?sig=2" },
+  ];
+
+  await withBridge({ wordpress, fetchImpl }, async (base) => {
+    const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ openaiFileIdRefs: refs, idempotency_key: "conversation-media-audio-pdf-1", optimization_mode: "ask" }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(body.uploaded.length, 2);
+    assert.deepEqual(uploaded.map((item) => item.mimeType), ["audio/wav", "application/pdf"]);
+    assert.deepEqual(uploaded.map((item) => item.data), [wav, pdf]);
+    assert.equal(body.uploaded.every((item) => item.optimized === false), true);
+  });
+});
+
+test("GPT conversation file upload rejects invalid PDF and audio signatures", async () => {
+  let uploads = 0;
+  const wordpress = { ...unusedWordPress(), wpImageUpload: async () => { uploads += 1; } };
+  await withBridge({
+    wordpress,
+    fetchImpl: async (url) => new Response(Buffer.from("not media"), {
+      status: 200,
+      headers: { "content-type": String(url).includes("pdf") ? "application/pdf" : "audio/mpeg" },
+    }),
+  }, async (base) => {
+    for (const [index, ref] of [
+      { name: "bad.pdf", id: "file_badpdf1", mime_type: "application/pdf", download_link: "https://files.oaiusercontent.com/bad.pdf" },
+      { name: "bad.mp3", id: "file_badmp31", mime_type: "audio/mpeg", download_link: "https://files.oaiusercontent.com/bad.mp3" },
+    ].entries()) {
+      const response = await fetch(`${base}/gpt/uploadConversationImages`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ openaiFileIdRefs: [ref], idempotency_key: `conversation-media-invalid-${index}` }),
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error, index === 0 ? "file_signature_mismatch" : "audio_signature_mismatch");
+    }
+    assert.equal(uploads, 0);
+  });
+});
+
 test("GPT conversation image upload rejects arbitrary and suffix-spoofed download hosts before fetching", async () => {
   let downloads = 0;
   await withBridge({ wordpress: unusedWordPress(), fetchImpl: async () => { downloads += 1; } }, async (base) => {
@@ -822,7 +923,7 @@ test("GPT conversation upload explains that sandbox files must be replaced by or
     const body = await response.json();
     assert.equal(response.status, 400);
     assert.equal(body.error, "non_downloadable_sandbox_file");
-    assert.match(body.message, /original attached image, DOCX, or ZIP/i);
+    assert.match(body.message, /original attached image.*DOCX.*ZIP/i);
     assert.equal(downloads, 0);
   });
 });

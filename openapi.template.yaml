@@ -1574,8 +1574,8 @@ paths:
       operationId: uploadConversationImages
       x-gpt-direct: true
       x-openai-isConsequential: true
-      summary: Upload images or extract them from DOCX/ZIP files.
-      description: 'Uploads images or extracts them from an original DOCX/ZIP attachment. Pass the original file, not Code Interpreter output or sandbox links. Large images return a no-write optimization recommendation. Arbitrary URLs are rejected.'
+      summary: Upload conversation media or extract images from DOCX/ZIP files.
+      description: 'Uploads original image, audio, or PDF attachments, or extracts images from DOCX/ZIP files. Pass the original file, not Code Interpreter output or sandbox links. Large images return a no-write optimization recommendation. Arbitrary URLs are rejected.'
       requestBody:
         required: true
         content:
@@ -1592,8 +1592,48 @@ paths:
                   minItems: 1
                   maxItems: 10
                   items:
-                    type: string
-                  description: 1-10 original JPEG, PNG, WebP, GIF, DOCX, or ZIP conversation attachments. Pass original DOCX/ZIP files directly; do not pass Code Interpreter sandbox outputs.
+                    type: object
+                    additionalProperties: false
+                    required:
+                    - id
+                    - name
+                    - mime_type
+                    - download_link
+                    properties:
+                      id:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 240
+                      mime_type:
+                        type: string
+                        enum:
+                        - image/jpeg
+                        - image/png
+                        - image/webp
+                        - image/gif
+                        - audio/mpeg
+                        - audio/wav
+                        - audio/x-wav
+                        - audio/ogg
+                        - audio/opus
+                        - audio/mp4
+                        - audio/x-m4a
+                        - audio/flac
+                        - audio/aac
+                        - audio/webm
+                        - application/pdf
+                        - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+                        - application/zip
+                        - application/x-zip-compressed
+                        - application/octet-stream
+                      download_link:
+                        type: string
+                        format: uri
+                  description: 1-10 original image, audio, PDF, DOCX, or ZIP conversation attachments. Pass original DOCX/ZIP files directly; do not pass Code Interpreter sandbox outputs.
                 idempotency_key:
                   type: string
                   minLength: 8
@@ -1607,21 +1647,21 @@ paths:
                   - optimize
                   - original
                   default: ask
-                  description: Use ask by default. It uploads ordinary web-sized files but returns a no-write recommendation for large images. Use optimize only after user approval to resize and convert recommended JPEG/PNG/WebP images to WebP. Use original only when explicitly requested.
+                  description: Use ask by default. It uploads ordinary files but returns a no-write recommendation for large images. Use optimize only after user approval to resize and convert recommended JPEG/PNG/WebP images to WebP. Use original only when explicitly requested.
       responses:
         '201':
-          description: Every image uploaded successfully.
+          description: Every supplied media file uploaded successfully.
         '207':
-          description: Some images uploaded while other independent uploads failed or have unknown outcomes.
+          description: Some supplied media files uploaded while other independent uploads failed or have unknown outcomes.
         '409':
-          description: No images uploaded because optimization is recommended, or the idempotency key conflicts.
+          description: No media uploaded because optimization is recommended, or the idempotency key conflicts.
         '413':
-          description: A source, batch, or prepared image exceeds a configured byte limit.
+          description: A source, batch, or prepared media file exceeds a configured byte limit.
   /v1/media:
     get:
       operationId: listMedia
-      summary: List or search image attachments in the WordPress Media Library.
-      description: Use attachment-parent, author, MIME, ID, date, or ordering filters to narrow results efficiently. Only image attachments are returned.
+      summary: List or search Media Library attachments.
+      description: Use attachment-parent, author, MIME, ID, date, or ordering filters to narrow results efficiently. Upload and edit operations are limited to supported image, audio, and PDF types.
       parameters:
       - name: search
         in: query
@@ -1631,21 +1671,21 @@ paths:
       - name: attached_to
         in: query
         required: false
-        description: Return images attached to this post/page ID; use 0 for unattached images.
+        description: Return supported media attached to this post/page ID; use 0 for unattached media.
         schema:
           type: integer
           minimum: 0
       - name: author_id
         in: query
         required: false
-        description: Return images uploaded by this WordPress author ID.
+        description: Return supported media uploaded by this WordPress author ID.
         schema:
           type: integer
           minimum: 1
       - name: mime_type
         in: query
         required: false
-        description: Restrict results to one supported image MIME type.
+        description: Restrict results to one supported image, audio, or PDF MIME type.
         schema:
           type: string
           enum:
@@ -1653,6 +1693,17 @@ paths:
           - image/png
           - image/webp
           - image/gif
+          - audio/mpeg
+          - audio/wav
+          - audio/x-wav
+          - audio/ogg
+          - audio/opus
+          - audio/mp4
+          - audio/x-m4a
+          - audio/flac
+          - audio/aac
+          - audio/webm
+          - application/pdf
       - name: include_ids
         in: query
         required: false
@@ -1735,11 +1786,11 @@ paths:
           default: 1
       responses:
         '200':
-          description: Matching image media items.
+          description: Matching Media Library items.
     post:
       operationId: uploadMedia
-      summary: Upload an image to the WordPress Media Library.
-      description: 'Uploads caller-supplied image bytes encoded as raw base64. The bridge does not fetch remote URLs. Supported MIME types are JPEG, PNG, WebP, and GIF. Requires an idempotency key; if a write timeout has an unknown outcome, reusing the same key replays that unknown result instead of blindly uploading again. Use the returned media ID as featured_media or insert the returned source_url into WordPress content when appropriate.
+      summary: Upload supported media to the WordPress Media Library.
+      description: 'Uploads caller-supplied image, audio, or PDF bytes encoded as raw base64. The bridge does not fetch remote URLs. Supported MIME types are JPEG, PNG, WebP, GIF, common audio formats, and PDF. Requires an idempotency key; if a write timeout has an unknown outcome, reusing the same key replays that unknown result instead of blindly uploading again. Use the returned media ID or source_url in a guarded content edit when appropriate.
 
         '
       requestBody:
@@ -1764,7 +1815,7 @@ paths:
                 filename:
                   type: string
                   maxLength: 240
-                  description: Image filename. Extension must match the MIME type if supplied.
+                  description: Media filename. Extension must match the MIME type if supplied.
                 mime_type:
                   type: string
                   enum:
@@ -1772,9 +1823,20 @@ paths:
                   - image/png
                   - image/webp
                   - image/gif
+                  - audio/mpeg
+                  - audio/wav
+                  - audio/x-wav
+                  - audio/ogg
+                  - audio/opus
+                  - audio/mp4
+                  - audio/x-m4a
+                  - audio/flac
+                  - audio/aac
+                  - audio/webm
+                  - application/pdf
                 data_base64:
                   type: string
-                  description: Raw base64 image data only; do not include a data URL prefix.
+                  description: Raw base64 media data only; do not include a data URL prefix.
                 title:
                   type: string
                   maxLength: 500
@@ -1790,13 +1852,13 @@ paths:
                   description: Optional WordPress post/page ID to associate the attachment with.
       responses:
         '201':
-          description: Image uploaded and Media Library metadata returned.
+          description: Media uploaded and Media Library metadata returned.
         '413':
-          description: Request or decoded image exceeds configured limits.
+          description: Request or decoded media exceeds configured limits.
   /v1/media/{media_id}:
     get:
       operationId: getMedia
-      summary: Read image attachment metadata.
+      summary: Read supported media attachment metadata.
       parameters:
       - name: media_id
         in: path
@@ -1805,11 +1867,11 @@ paths:
           type: integer
       responses:
         '200':
-          description: Image attachment metadata.
+          description: Supported media attachment metadata.
     patch:
       operationId: updateMedia
-      summary: Edit image attachment metadata.
-      description: 'Updates only metadata such as title, alt text, caption, description, or attachment parent. It does not replace image bytes and cannot delete media.
+      summary: Edit supported media attachment metadata.
+      description: 'Updates only metadata such as title, alt text, caption, description, or attachment parent. It does not replace media bytes and cannot delete media.
 
         '
       parameters:
@@ -1840,7 +1902,7 @@ paths:
                   minimum: 0
       responses:
         '200':
-          description: Updated image metadata.
+          description: Updated media metadata.
   /v1/media/{media_id}/transform:
     post:
       operationId: transformMedia
