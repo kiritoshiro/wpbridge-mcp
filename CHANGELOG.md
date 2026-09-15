@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Raise decoded image/audio/PDF upload and conversation-source limits to 30 MB;
+  increase the JSON body allowance to 42 MB for base64 expansion while keeping
+  OpenAI `openaiFileResponse` downloads at their provider-defined 10 MB limit.
+- Add `downloadMedia`, which fetches a supported same-origin WordPress media
+  attachment by ID and returns it through a short-lived OpenAI `openaiFileResponse`
+  URL for PDF/audio editing in Code Interpreter; arbitrary URL fetching remains blocked.
 - Extend conversation and base64 media uploads to validated audio and PDF files,
   while retaining image optimization and DOCX/ZIP image extraction.
 - Use the installed ALPS helper's canonical fingerprint for reads and writes,

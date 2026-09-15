@@ -156,6 +156,37 @@ test("image fallback rejects a WordPress-supplied cross-origin URL before downlo
   assert.equal(fetches, 0);
 });
 
+test("media download accepts a same-origin PDF with bounded bytes", async () => {
+  const pdf = Buffer.from("%PDF-1.7\n%%EOF\n");
+  let captured;
+  const client = createWordPressClient(cfg, {
+    fetchImpl: async (url, options) => {
+      captured = { url: String(url), options };
+      return new Response(pdf, {
+        status: 200,
+        headers: { "content-type": "application/pdf", "content-length": String(pdf.length) },
+      });
+    },
+  });
+  const result = await client.wpMediaDownload("https://example.test/wordpress/wp-content/uploads/book.pdf", 100, "application/pdf");
+  assert.deepEqual(result, pdf);
+  assert.equal(captured.url, "https://example.test/wordpress/wp-content/uploads/book.pdf");
+  assert.equal(captured.options.headers.accept, "application/pdf");
+});
+
+test("media download rejects an unexpected same-origin MIME type", async () => {
+  const client = createWordPressClient(cfg, {
+    fetchImpl: async () => new Response(Buffer.from("not pdf"), {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    }),
+  });
+  await assert.rejects(
+    () => client.wpMediaDownload("https://example.test/wp-content/uploads/book.pdf", 100, "application/pdf"),
+    (error) => error.status === 502 && error.code === "wordpress_media_mime_mismatch"
+  );
+});
+
 
 test("mutating WordPress timeouts are marked as unknown outcomes", async () => {
   const client = createWordPressClient(cfg, {

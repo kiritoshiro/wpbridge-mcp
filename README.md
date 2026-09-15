@@ -1,7 +1,7 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-86 grouped editorial capabilities through 12 grouped operations plus one direct
+87 grouped editorial capabilities through 12 grouped operations plus one direct
 conversation-media uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
@@ -106,6 +106,7 @@ not expose revision deletion.
 - List/search Media Library attachments; upload/edit supported images, audio, and PDFs
 - Filter lists by attached post/page, author, MIME type, exact IDs, publication/modification time, and explicit ordering
 - Read supported media metadata
+- Return an existing WordPress PDF or audio file to GPT as a temporary `openaiFileResponse` for Code Interpreter editing (bounded by `MAX_MEDIA_DOWNLOAD_BYTES`, up to 10 MB)
 - Upload up to 10 images, audio files, or PDFs attached to a ChatGPT conversation through temporary OpenAI file references
 - Extract JPEG, PNG, WebP, and GIF images embedded in attached DOCX files or stored in ZIP archives
 - Bound archive entry count, extracted image count, individual size, and total expanded size
@@ -117,7 +118,7 @@ not expose revision deletion.
 - Create a rotated, horizontally/vertically flipped, and/or percentage-cropped derivative from existing media
 - Preserve the original attachment and return the new media ID/URL for a guarded gallery, block, content, or featured-image update
 - Use returned media IDs as featured images on posts/pages
-- No arbitrary remote-URL fetching
+- `downloadMedia` accepts only a media ID resolved through authenticated WordPress and returns a short-lived file URL; arbitrary remote-URL fetching remains unavailable
 
 Collection responses request only the bounded summary fields used by WPBridge. This reduces WordPress response size while full-item read actions remain available when editable content is needed. Allowlisted custom-item lists also support author, exact-ID, date, and ordering filters.
 
@@ -447,8 +448,9 @@ For a large image, the default `optimization_mode=ask` returns a recommendation
 without uploading anything. After the user approves, retrying with
 `optimization_mode=optimize` resizes within the configured maximum dimension and
 converts JPEG, PNG, or WebP to WebP. Automatic GIF conversion is intentionally
-disabled to avoid discarding animation. The final decoded image limit is 8 MB
-(`MAX_MEDIA_BYTES=8000000`).
+disabled to avoid discarding animation. The final decoded media limit is 30 MB
+(`MAX_MEDIA_BYTES=30000000`, 30,000,000 bytes). The JSON request limit is
+`MAX_BODY_BYTES=42000000` so a 30 MB file still fits after base64 expansion.
 
 The bridge never downloads an arbitrary user-supplied URL. Uploads also require
 an idempotency key so a retry after an ambiguous connection failure cannot silently

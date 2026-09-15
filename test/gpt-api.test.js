@@ -26,7 +26,7 @@ function assertObjectSchemasHaveProperties(value, context = "schema") {
 test("GPT schema has 12 grouped operations plus direct conversation-file upload", () => {
   const schema = buildGptSchema("https://example.test");
   assert.equal(Object.keys(schema.paths).length, 13);
-  assert.equal(operations.size, 87);
+  assert.equal(operations.size, 89);
   assert.deepEqual(schema.components.schemas, {});
   for (const [route, item] of Object.entries(schema.paths)) {
     for (const [method, operation] of Object.entries(item)) {
@@ -63,6 +63,9 @@ test("GPT schema has 12 grouped operations plus direct conversation-file upload"
   assert.equal(fileRef.properties.mime_type.enum.includes("audio/mpeg"), true);
   assert.equal(fileRef.properties.mime_type.enum.includes("application/pdf"), true);
   assertObjectSchemasHaveProperties(direct.requestBody.content["application/json"].schema, "uploadConversationImages");
+  const mediaResponse = schema.paths["/gpt/media"].post.responses["200"].content["application/json"].schema;
+  assert.ok(mediaResponse.properties.openaiFileResponse);
+  assert.equal(mediaResponse.properties.openaiFileResponse.type, "array");
 });
 
 test("direct conversation-file action maps only to the fixed attachment upload route", async () => {

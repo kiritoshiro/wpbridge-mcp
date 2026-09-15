@@ -5,12 +5,19 @@ Run `npm ci` after updating, then restart the bridge. Set `PUBLIC_BASE_URL` in
 Import **openapi.gpt.yaml** in the Custom GPT editor and refresh its instructions
 from GPT-INSTRUCTIONS.txt. Keep bearer API-key authentication configured.
 
-The generated GPT schema has 12 grouped operations representing 86 restricted actions,
+The generated GPT schema has 12 grouped operations representing 87 restricted actions,
 plus the direct conversation-media upload operation. That action accepts
 validated images, common audio, PDF, DOCX, and ZIP attachments; only images are
 eligible for optional resize/WebP optimization.
 The full `openapi.template.yaml` and `openapi.generated.yaml` still describe the
 original REST endpoints. No original endpoint has been removed.
+
+The `downloadMedia` action resolves an existing WordPress media ID, downloads only
+that same-origin file within the configured size limit, and returns it through
+`openaiFileResponse`. OpenAI then attaches the temporary PDF/audio file to the
+conversation so Code Interpreter can edit it. Upload the edited result with
+`uploadConversationImages` or `uploadMedia`, then update the page reference with a
+guarded content edit. `PUBLIC_BASE_URL` must be configured for this action.
 
 Each group accepts a discriminated input with `action`, optional `path` and
 `query` objects, and the action's original `body`. Each action has its own typed

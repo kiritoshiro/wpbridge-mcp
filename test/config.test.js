@@ -5,6 +5,7 @@ import {
   buildWpRestUrl,
   clientIp,
   loadConfig,
+  normalizePublicBaseUrl,
   normalizeWpUrl,
   parseBooleanSetting,
   parseDefaultAuthor,
@@ -38,6 +39,14 @@ test("WordPress subdirectory is preserved in REST targets", () => {
     buildWpRestUrl(wpUrl, "/wp-json/wp/v2/posts/42?context=edit").toString(),
     "https://example.test/wordpress/wp-json/wp/v2/posts/42?context=edit"
   );
+});
+
+test("public base URL is optional but must be HTTPS without credentials or query state", () => {
+  assert.equal(normalizePublicBaseUrl(""), null);
+  assert.equal(normalizePublicBaseUrl("https://bridge.example.test/"), "https://bridge.example.test");
+  assert.throws(() => normalizePublicBaseUrl("http://bridge.example.test"), /HTTPS/);
+  assert.throws(() => normalizePublicBaseUrl("https://user:pass@bridge.example.test"), /credentials/);
+  assert.throws(() => normalizePublicBaseUrl("https://bridge.example.test/?token=1"), /query string/);
 });
 
 test("external listener binding requires an explicit opt-in", () => {
@@ -124,8 +133,8 @@ test("conversation image limits and optimization settings are bounded and consis
   };
   const cfg = loadConfig({
     ...base,
-    MAX_MEDIA_BYTES: "8000000",
-    MAX_SOURCE_IMAGE_BYTES: "20000000",
+    MAX_MEDIA_BYTES: "30000000",
+    MAX_SOURCE_IMAGE_BYTES: "30000000",
     MAX_SOURCE_IMAGE_BATCH_BYTES: "50000000",
     IMAGE_OPTIMIZE_THRESHOLD_BYTES: "1500000",
     IMAGE_OPTIMIZE_MAX_DIMENSION: "1920",
@@ -133,16 +142,31 @@ test("conversation image limits and optimization settings are bounded and consis
     MAX_ARCHIVE_ENTRIES: "1000",
     MAX_EXTRACTED_IMAGES: "50",
   });
-  assert.equal(cfg.maxSourceImageBytes, 20_000_000);
+  assert.equal(cfg.maxMediaBytes, 30_000_000);
+  assert.equal(cfg.maxSourceImageBytes, 30_000_000);
   assert.equal(cfg.maxSourceImageBatchBytes, 50_000_000);
   assert.equal(cfg.imageOptimizeThresholdBytes, 1_500_000);
   assert.equal(cfg.imageOptimizeMaxDimension, 1920);
   assert.equal(cfg.imageOptimizeQuality, 82);
   assert.equal(cfg.maxArchiveEntries, 1000);
   assert.equal(cfg.maxExtractedImages, 50);
-  assert.throws(() => loadConfig({ ...base, MAX_MEDIA_BYTES: "8000000", MAX_SOURCE_IMAGE_BYTES: "7000000" }), /at least MAX_MEDIA_BYTES/);
-  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", MAX_SOURCE_IMAGE_BATCH_BYTES: "10000000" }), /at least MAX_SOURCE_IMAGE_BYTES/);
-  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "20000000", IMAGE_OPTIMIZE_THRESHOLD_BYTES: "30000000" }), /must not exceed MAX_SOURCE_IMAGE_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_MEDIA_BYTES: "30000000", MAX_SOURCE_IMAGE_BYTES: "29999999" }), /at least MAX_MEDIA_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "30000000", MAX_SOURCE_IMAGE_BATCH_BYTES: "10000000" }), /at least MAX_SOURCE_IMAGE_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_SOURCE_IMAGE_BYTES: "30000000", IMAGE_OPTIMIZE_THRESHOLD_BYTES: "30000001" }), /must not exceed MAX_SOURCE_IMAGE_BYTES/);
+  assert.throws(() => loadConfig({ ...base, MAX_MEDIA_BYTES: "30000001" }), /MAX_MEDIA_BYTES must/);
+});
+
+test("media upload defaults provide 30 MB decoded-file and base64 body headroom", () => {
+  const cfg = loadConfig({
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  });
+  assert.equal(cfg.maxBodyBytes, 42_000_000);
+  assert.equal(cfg.maxMediaBytes, 30_000_000);
+  assert.equal(cfg.maxSourceImageBytes, 30_000_000);
+  assert.equal(cfg.maxSourceImageBatchBytes, 50_000_000);
 });
 
 test("large content response limit is bounded and configurable", () => {
@@ -156,6 +180,19 @@ test("large content response limit is bounded and configurable", () => {
   assert.equal(cfg.maxContentResponseChars, 32_000);
   assert.throws(() => loadConfig({ ...base, MAX_CONTENT_RESPONSE_CHARS: "3999" }), /MAX_CONTENT_RESPONSE_CHARS must/);
   assert.throws(() => loadConfig({ ...base, MAX_CONTENT_RESPONSE_CHARS: "200001" }), /MAX_CONTENT_RESPONSE_CHARS must/);
+});
+
+test("media download limit is independently bounded for OpenAI file responses", () => {
+  const base = {
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  };
+  const cfg = loadConfig({ ...base, MAX_MEDIA_BYTES: "30000000", MAX_MEDIA_DOWNLOAD_BYTES: "10000000" });
+  assert.equal(cfg.maxMediaBytes, 30_000_000);
+  assert.equal(cfg.maxMediaDownloadBytes, 10_000_000);
+  assert.throws(() => loadConfig({ ...base, MAX_MEDIA_DOWNLOAD_BYTES: "10000001" }), /MAX_MEDIA_DOWNLOAD_BYTES must/);
 });
 
 

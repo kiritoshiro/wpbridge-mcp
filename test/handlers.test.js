@@ -14,10 +14,12 @@ const apiKey = "b".repeat(40);
 function baseConfig(overrides = {}) {
   return {
     wpUrl: "https://example.test/wordpress",
+    publicBaseUrl: "https://bridge.example.test",
     allowPublish: false,
     allowLiveEdits: false,
     maxBodyBytes: 1_000_000,
     maxMediaBytes: 100_000,
+    maxMediaDownloadBytes: 100_000,
     maxSourceImageBytes: 500_000,
     maxSourceImageBatchBytes: 1_000_000,
     imageOptimizeThresholdBytes: 50_000,
@@ -73,7 +75,7 @@ function unusedWordPress() {
   const fail = async () => {
     throw new Error("WordPress should not have been called");
   };
-  return { wpRequest: fail, wpSeoHelperRequest: fail, wpImageUpload: fail, wpImageDownload: fail };
+  return { wpRequest: fail, wpSeoHelperRequest: fail, wpImageUpload: fail, wpImageDownload: fail, wpMediaDownload: fail };
 }
 
 test("grouped API preserves auth, publish guards, and idempotency requirements", async () => {
@@ -125,6 +127,10 @@ test("health is public but editorial endpoints require bridge authentication", a
     assert.equal(healthBody.version, "1.15.1");
     assert.equal(healthBody.media_transform_enabled, true);
     assert.deepEqual(healthBody.media_transform_operations, ["rotate", "flip", "crop"]);
+    assert.equal(healthBody.max_body_bytes, 1_000_000);
+    assert.equal(healthBody.max_media_bytes, 100_000);
+    assert.equal(healthBody.max_source_image_bytes, 500_000);
+    assert.equal(healthBody.max_source_image_batch_bytes, 1_000_000);
 
     const posts = await fetch(`${base}/v1/posts`);
     assert.equal(posts.status, 401);
@@ -535,6 +541,105 @@ test("media endpoint accepts PDF and audio base64 uploads", async () => {
     assert.equal(response.status, 201);
     assert.equal((await response.json()).id, 120);
     assert.deepEqual(uploads, [{ filename: "book.pdf", mimeType: "application/pdf", data: pdf }]);
+  });
+});
+
+test("downloadMedia returns an existing PDF as a temporary OpenAI file", async () => {
+  const pdf = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+  const source = {
+    id: 314,
+    media_type: "file",
+    mime_type: "application/pdf",
+    source_url: "https://example.test/wp-content/uploads/book.pdf",
+    modified_gmt: "2026-09-15T08:00:00",
+    title: { rendered: "Book" },
+    media_details: { filesize: pdf.length },
+  };
+  let reads = 0;
+  let downloads = 0;
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async (restPath, options = {}) => {
+      assert.equal(options.method || "GET", "GET");
+      assert.equal(restPath, "/wp-json/wp/v2/media/314?context=edit");
+      reads += 1;
+      return { data: source, headers: new Headers() };
+    },
+    wpMediaDownload: async (sourceUrl, maxBytes, mimeType) => {
+      assert.equal(sourceUrl, source.source_url);
+      assert.equal(maxBytes, 100_000);
+      assert.equal(mimeType, "application/pdf");
+      downloads += 1;
+      return pdf;
+    },
+  };
+
+  await withBridge({ wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const response = await fetch(`${base}/gpt/media`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ action: "downloadMedia", path: { media_id: 314 } }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(reads, 1);
+    assert.equal(downloads, 1);
+    assert.equal(body.file.name, "book.pdf");
+    assert.equal(body.file.mime_type, "application/pdf");
+    assert.equal(body.file.bytes, pdf.length);
+    assert.match(body.file.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(body.openaiFileResponse.length, 1);
+
+    // OpenAI's file fetcher does not send the Action API key. The opaque token
+    // URL therefore has to work without authorization and must return bytes.
+    const returnedUrl = new URL(body.openaiFileResponse[0]);
+    const fileResponse = await fetch(`${base}${returnedUrl.pathname}`);
+    assert.equal(fileResponse.status, 200);
+    assert.equal(fileResponse.headers.get("content-type"), "application/pdf");
+    assert.match(fileResponse.headers.get("content-disposition"), /book\.pdf/);
+    assert.deepEqual(Buffer.from(await fileResponse.arrayBuffer()), pdf);
+  });
+});
+
+test("downloadMedia refuses to issue a file URL without PUBLIC_BASE_URL", async () => {
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async () => { throw new Error("must not read without public URL"); },
+  };
+  await withBridge({ wordpress, cfg: baseConfig({ publicBaseUrl: null }) }, async (base) => {
+    const response = await fetch(`${base}/gpt/media`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "downloadMedia", path: { media_id: 314 } }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error, "public_base_url_required");
+  });
+});
+
+test("downloadMedia keeps images on the dedicated transform path", async () => {
+  const wordpress = {
+    ...unusedWordPress(),
+    wpRequest: async () => ({
+      data: {
+        id: 315,
+        media_type: "image",
+        mime_type: "image/jpeg",
+        source_url: "https://example.test/wp-content/uploads/photo.jpg",
+      },
+      headers: new Headers(),
+    }),
+    wpMediaDownload: async () => { throw new Error("must not download image"); },
+  };
+  await withBridge({ wordpress }, async (base) => {
+    const response = await fetch(`${base}/gpt/media`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "downloadMedia", path: { media_id: 315 } }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "openai_file_response_unsupported");
   });
 });
 

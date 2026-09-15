@@ -96,9 +96,9 @@ ALLOW_PUBLISH=false
 ALLOW_LIVE_EDITS=false
 ALLOW_EXTERNAL_ACCESS=false
 TRUSTED_PROXY_IPS=
-MAX_BODY_BYTES=12000000
-MAX_MEDIA_BYTES=8000000
-MAX_SOURCE_IMAGE_BYTES=20000000
+MAX_BODY_BYTES=42000000
+MAX_MEDIA_BYTES=30000000
+MAX_SOURCE_IMAGE_BYTES=30000000
 MAX_SOURCE_IMAGE_BATCH_BYTES=50000000
 IMAGE_OPTIMIZE_THRESHOLD_BYTES=1500000
 IMAGE_OPTIMIZE_MAX_DIMENSION=1920
@@ -325,9 +325,20 @@ are resized within the configured maximum dimension and converted to WebP. GIFs 
 automatically optimized because conversion could remove animation.
 
 The older `uploadMedia` action remains available for callers that already have genuine
-raw base64 bytes. The default final image size limit is 8 MB. After upload, use the returned media ID to set
+raw base64 bytes. The default decoded media size limit is 30 MB (30,000,000 bytes).
+The JSON request limit is 42 MB to accommodate base64 expansion. After upload, use the returned media ID to set
 `featured_media` on a post/page, or use the returned `source_url` when
 intentionally inserting the image into content.
+
+To edit an existing WordPress PDF or audio attachment, call the grouped `media`
+action with `action="downloadMedia"` and its numeric Media ID. The bridge downloads
+only the authenticated, same-origin WordPress source and returns a short-lived
+`openaiFileResponse` URL; OpenAI attaches that file to the conversation for Code
+Interpreter. Upload the edited file again with `uploadConversationImages` or
+`uploadMedia`, then update any page links with a guarded content edit. This requires
+`PUBLIC_BASE_URL` to be set to the HTTPS bridge origin.
+The returned file is limited by `MAX_MEDIA_DOWNLOAD_BYTES` (default 10 MB),
+separately from the smaller base64 upload limit.
 
 There is intentionally **no delete endpoint**, so test drafts, pages, or media
 cannot be deleted through the bridge. Remove them manually in WordPress when
