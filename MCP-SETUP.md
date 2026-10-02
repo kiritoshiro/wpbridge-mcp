@@ -4,7 +4,7 @@ This repository contains three new parts: `mcp/` (the multi-site MCP gateway), `
 
 ## 1. Install the code
 
-On the `feature/mcp-plugin-gateway` branch, run `npm ci`. Set `PUBLIC_BASE_URL` to your intended HTTPS bridge origin (for example `$env:PUBLIC_BASE_URL="https://wpbridge.site-one.example"` in PowerShell), then run `npm run ci`. The plugin's `.mcp.json` points to the current local checkout path; edit its `args[0]` if the repository moves. Do not commit `.env` files or `mcp/sites.local.json`.
+On main, run npm ci. Set PUBLIC_BASE_URL to the intended HTTPS bridge origin, then run npm run ci. The plugin's .mcp.json contains an example absolute path; set args[0] to this checkout's mcp/server.js before installing the plugin. Do not commit .env files or mcp/sites.local.json.
 
 Run a separate bridge instance for each enrolled site and verify its configuration before enabling site control.
 
@@ -58,10 +58,10 @@ When `WPBRIDGE_MCP_OAUTH_ISSUER` is set, the gateway validates signature, issuer
 
 ## 6. Verify and operate
 
-Run `npm run ci`, `php -l wordpress/wpbridge-control/wpbridge-control.php`, and the plugin validator shown below. Test both sites separately. Confirm that a key for one site cannot act on the other, an editor credential cannot use site control, and stale fingerprints or versions are rejected. Review the existing bridge logs and WordPress state after each write. The companion plugin does not provide a backup or rollback for a plugin upgrade.
+Run `npm run ci`, `php -l wordpress/wpbridge-control/wpbridge-control.php`, and the plugin validator shown below. Test each enrolled site separately. Confirm that a key for one site cannot act on the other, an editor credential cannot use site control, and stale fingerprints or versions are rejected. Review the existing bridge logs and WordPress state after each write. The companion plugin does not provide a backup or rollback for a plugin upgrade.
 
 ```powershell
-python C:/Users/you/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/wpbridge
+python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge
 ```
 
 MCP `upload_attached_media` adapts ChatGPT file inputs to WPBridge's existing attachment uploader. `downloadMedia` currently returns the existing GPT file-response URL as JSON; verify its behavior in the chosen MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.

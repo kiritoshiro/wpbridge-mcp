@@ -1,9 +1,9 @@
 {
-  "name": "site-one-wordpress-chatgpt-bridge",
+  "name": "wpbridge-mcp",
   "version": "1.15.1",
   "private": true,
   "type": "module",
-  "description": "Restricted local bridge between a private ChatGPT GPT Action and WordPress REST API, with posts, pages, version-bound edit previews, media, Gutenberg/revisions, workflow, taxonomy, comments, discovery, SEO, allowlisted custom content/taxonomies, privacy-filtered authors, persistent idempotent retry protection, deadline-bounded editorial audits, resumable capped bulk editorial metadata edits, and privacy-filtered activity history with preview- and conflict-guarded recovery, plus optional enforced default authorship for newly created content.",
+  "description": "Self-hosted multi-site WordPress MCP gateway, Codex plugin, and guarded WordPress bridge.",
   "engines": {
     "node": ">=20"
   },

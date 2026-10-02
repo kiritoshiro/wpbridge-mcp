@@ -1,12 +1,12 @@
-# SiteOne WordPress ↔ ChatGPT bridge
+# WPBridge MCP
 
-For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-100 restricted capabilities through 13 grouped operations plus one direct
-conversation-media uploader. See [GPT API setup](GPT-API.md).
-The full REST schema is retained for direct API clients.
+Control explicitly connected WordPress sites through a self-hosted MCP gateway.
+This repository contains the per-site editorial bridge, the multi-site MCP
+server, a Codex plugin, and optional WordPress companion plugins. Each site
+has its own credentials and allowed actions. Start with the [MCP setup guide](MCP-SETUP.md).
 
-A deliberately restricted local API bridge for controlling WordPress editorial
-content through a **private Custom GPT Action**.
+The earlier Custom GPT Action API remains available for existing clients.
+See [GPT API setup](GPT-API.md) for its grouped operations and OpenAPI schema.
 
 ## Included in v1.15.1
 
