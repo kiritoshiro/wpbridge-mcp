@@ -1,6 +1,6 @@
 {
   "name": "wpbridge",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20261002162446",
   "description": "Control explicitly connected WordPress sites through guarded WPBridge MCP tools.",
   "author": {
     "name": "WPBridge"
