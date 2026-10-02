@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { safeEqual } from "../lib/auth.js";
 
-export function createHttpAuth(env = process.env) {
+export function createHttpAuth(env = process.env, { jwks: suppliedJwks } = {}) {
   const issuer = String(env.WPBRIDGE_MCP_OAUTH_ISSUER || "");
   if (issuer) {
     const audience = env.WPBRIDGE_MCP_OAUTH_AUDIENCE;
@@ -14,7 +14,7 @@ export function createHttpAuth(env = process.env) {
     }
     const resource = new URL(publicUrl);
     if (resource.pathname !== "/mcp" || resource.search || resource.hash) throw new Error("WPBRIDGE_MCP_PUBLIC_URL must end in /mcp.");
-    const jwks = createRemoteJWKSet(new URL(jwksUrl));
+    const jwks = suppliedJwks || createRemoteJWKSet(new URL(jwksUrl));
     const scope = "wpbridge:access";
     return {
       mode: "oauth",
@@ -29,7 +29,8 @@ export function createHttpAuth(env = process.env) {
         if (!token) return false;
         try {
           const { payload } = await jwtVerify(token, jwks, { issuer, audience });
-          return payload.sub === subject && String(payload.scope || "").split(/\s+/).includes(scope);
+          return Number.isInteger(payload.exp) && payload.sub === subject &&
+            String(payload.scope || "").split(/\s+/).includes(scope);
         } catch { return false; }
       },
     };
