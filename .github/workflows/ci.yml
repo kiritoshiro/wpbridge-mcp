@@ -34,11 +34,19 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Syntax validation
         run: npm run check
+      - name: Instruction size validation
+        run: npm run check:instructions
       - name: Automated tests
         run: npm test
       - name: Render and verify OpenAPI schema
         run: npm run render-openapi && npm run check:openapi
         shell: bash
+      - name: Failure environment summary
+        if: failure()
+        shell: bash
+        run: |
+          echo "Runner: $RUNNER_OS; Node: $(node --version); npm: $(npm --version)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run the Debug tests workflow with the affected suite for stack traces." >> "$GITHUB_STEP_SUMMARY"
 
   php:
     runs-on: ubuntu-latest
@@ -51,3 +59,5 @@ jobs:
         run: |
           php -l wordpress/wpbridge-seo-helper/wpbridge-seo-helper.php
           php -l wordpress/wpbridge-alps-helper/wpbridge-alps-helper.php
+          php -l wordpress/wpbridge-mec-helper/wpbridge-mec-helper.php
+          php -l wordpress/wpbridge-control/wpbridge-control.php

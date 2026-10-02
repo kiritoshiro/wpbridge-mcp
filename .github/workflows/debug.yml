@@ -1,0 +1,53 @@
+name: Debug tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Test area to diagnose
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - mcp
+          - site-control
+          - editorial
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUBLIC_BASE_URL: https://example.test
+      NODE_OPTIONS: --trace-uncaught --trace-warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Run selected checks with stack traces
+        env:
+          SUITE: ${{ inputs.suite }}
+        shell: bash
+        run: |
+          case "$SUITE" in
+            all) npm run ci ;;
+            mcp) node --test test/mcp.test.js test/http-auth.test.js ;;
+            site-control) node --test test/site-control.test.js ;;
+            editorial) node --test test/handlers.test.js ;;
+            *) echo "Unsupported suite" >&2; exit 2 ;;
+          esac
+      - name: Point to diagnostic logs
+        if: failure()
+        shell: bash
+        run: |
+          echo "The failed step above contains the test output and stack traces." >> "$GITHUB_STEP_SUMMARY"
+          echo "For runner-level logging, temporarily enable the ACTIONS_STEP_DEBUG repository variable and rerun this workflow." >> "$GITHUB_STEP_SUMMARY"
