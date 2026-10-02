@@ -1,0 +1,19 @@
+{
+  "sites": [
+    {
+      "id": "site-one",
+      "bridge_url": "http://127.0.0.1:8787",
+      "bridge_key_env": "WPBRIDGE_SITE_ONE_KEY",
+      "control_key_env": "WPBRIDGE_SITE_ONE_CONTROL_KEY",
+      "permissions": ["read", "editorial"],
+      "allowed_actions": ["bridgeHealth", "listPosts", "getPost", "previewPostEdit", "updatePost", "getSite"]
+    },
+    {
+      "id": "site-two",
+      "bridge_url": "http://127.0.0.1:8788",
+      "bridge_key_env": "WPBRIDGE_SITE_TWO_KEY",
+      "permissions": ["read"],
+      "allowed_actions": ["bridgeHealth", "listPosts", "getPost"]
+    }
+  ]
+}

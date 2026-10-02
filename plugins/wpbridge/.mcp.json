@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "wpbridge": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\you\\Documents\\Workspace\\projects\\wpbridge\\mcp\\server.js",
+        "--stdio"
+      ]
+    }
+  }
+}

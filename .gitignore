@@ -1,4 +1,6 @@
 .env
+mcp/.env
+mcp/sites.local.json
 openapi.generated.yaml
 openapi.gpt.yaml
 node_modules/

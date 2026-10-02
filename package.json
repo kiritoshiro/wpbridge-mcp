@@ -9,6 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
+    "mcp": "node mcp/server.js --stdio",
+    "mcp:http": "node mcp/server.js --http",
     "check": "node scripts/check-syntax.mjs",
     "generate-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     "render-openapi": "node scripts/render-openapi.mjs",
@@ -18,9 +20,12 @@
     "check:openapi": "node scripts/check-openapi.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "jose": "^6.2.12",
     "sharp": "0.35.4",
     "yaml": "2.9.0",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "yazl": "3.3.1"

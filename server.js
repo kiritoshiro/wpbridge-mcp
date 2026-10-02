@@ -12,6 +12,7 @@ import { writeBridgeError } from "./lib/http.js";
 import { createFileIdempotencyStore } from "./lib/idempotency.js";
 import { createFileBulkOperationStore } from "./lib/bulk-operations.js";
 import { createWordPressClient } from "./lib/wordpress.js";
+import { createSiteControlHandler } from "./lib/site-control.js";
 
 loadEnvFile();
 
@@ -41,12 +42,14 @@ const bulkOperations = createFileBulkOperationStore({
   maxRecords: cfg.bulkOperationMaxRecords,
 });
 const route = createRouteHandler({ cfg, wordpress, security, idempotency, activity, bulkOperations });
+const siteControl = createSiteControlHandler({ cfg, security });
 
 const server = http.createServer(async (req, res) => {
   const started = Date.now();
   const pathname = String(req.url || "").split("?")[0];
   try {
-    await route(req, res);
+    if (pathname.startsWith("/v1/site-control/")) await siteControl(req, res);
+    else await route(req, res);
   } catch (err) {
     const requestId = String(res.getHeader("x-request-id") || "") || undefined;
     if (!res.headersSent) {

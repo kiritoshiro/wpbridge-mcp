@@ -1,0 +1,26 @@
+{
+  "name": "wpbridge",
+  "version": "0.1.0",
+  "description": "Control explicitly connected WordPress sites through guarded WPBridge MCP tools.",
+  "author": {
+    "name": "WPBridge"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "WPBridge",
+    "shortDescription": "Manage connected WordPress sites.",
+    "longDescription": "Guarded editorial work and selected site maintenance across explicitly configured WordPress sites.",
+    "developerName": "WPBridge",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "List my connected WordPress sites",
+      "Review drafts on site-one.example"
+    ]
+  },
+  "mcpServers": "./.mcp.json",
+  "repository": "https://github.com/kiritoshiro/wpbridge-mcp"
+}
