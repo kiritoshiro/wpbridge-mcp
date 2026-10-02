@@ -1,7 +1,7 @@
 # SiteOne WordPress ↔ ChatGPT bridge
 
 For Custom GPT Actions, generate and import **openapi.gpt.yaml**: it exposes all
-87 grouped editorial capabilities through 12 grouped operations plus one direct
+100 restricted capabilities through 13 grouped operations plus one direct
 conversation-media uploader. See [GPT API setup](GPT-API.md).
 The full REST schema is retained for direct API clients.
 
@@ -200,6 +200,21 @@ Collection responses request only the bounded summary fields used by WPBridge. T
 - No arbitrary `post_meta` endpoint and no automatic meta registration
 - WordPress must register each field with `show_in_rest=true`; custom post types must also support `custom-fields`
 
+### Modern Events Calendar controls
+
+The SiteOne Calendar project uses Modern Events Calendar Lite's `mec-events`
+post type and stores recurrence/index data outside the ordinary post fields.
+Install and activate `wordpress/wpbridge-mec-helper` on that WordPress site,
+then set `CALENDAR_ENABLED=true` in the bridge `.env`. The helper calls MEC's
+own `save_event()` routine, keeping its date index and recurrence schedule in
+sync while exposing fixed editorial fields through the bridge.
+
+Calendar controls include event search/listing, compact event reads, draft
+creation, optimistic-lock previews and updates, date/time and recurrence
+editing, MEC categories/locations/organizers/labels/speakers, featured media,
+event galleries, publication and scheduling. Booking, ticket, payment and
+attendee data are intentionally excluded.
+
 Example `.env` configuration:
 
 ```text
@@ -208,6 +223,7 @@ ENFORCE_DEFAULT_AUTHOR=true
 CUSTOM_POST_TYPES=sermon,resource
 CUSTOM_FIELD_ALLOWLIST=post:subtitle;page:hero_text;sermon:speaker,sermon_date
 CUSTOM_TAXONOMY_ALLOWLIST=sermon:series,speaker;resource:resource_topic
+CALENDAR_ENABLED=true
 ```
 
 ### Allowlisted custom taxonomies

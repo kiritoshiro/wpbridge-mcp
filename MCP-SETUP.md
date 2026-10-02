@@ -4,7 +4,7 @@ This repository contains three new parts: `mcp/` (the multi-site MCP gateway), `
 
 ## 1. Install the code
 
-On the `feature/mcp-plugin-gateway` branch, run `npm ci` and `npm run ci` in the repository. The plugin's `.mcp.json` points to the current local checkout path; edit its `args[0]` if the repository moves. Do not commit `.env` files or `mcp/sites.local.json`.
+On the `feature/mcp-plugin-gateway` branch, run `npm ci`. Set `PUBLIC_BASE_URL` to your intended HTTPS bridge origin (for example `$env:PUBLIC_BASE_URL="https://wpbridge.site-one.example"` in PowerShell), then run `npm run ci`. The plugin's `.mcp.json` points to the current local checkout path; edit its `args[0]` if the repository moves. Do not commit `.env` files or `mcp/sites.local.json`.
 
 Run a separate bridge instance for each enrolled site and verify its configuration before enabling site control.
 

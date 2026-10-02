@@ -29,6 +29,7 @@ function baseConfig(overrides = {}) {
     customPostTypes: [],
     customFieldAllowlist: new Map(),
     customTaxonomyAllowlist: new Map(),
+    calendarEnabled: false,
     idempotencyRetentionHours: 168,
     auditDeadlineMs: 15000,
     auditConcurrency: 4,
@@ -135,6 +136,44 @@ test("health is public but editorial endpoints require bridge authentication", a
     const posts = await fetch(`${base}/v1/posts`);
     assert.equal(posts.status, 401);
     assert.equal((await posts.json()).error, "unauthorized");
+  });
+});
+
+test("calendar helper exposes filtered events and hash-protected editorial controls", async () => {
+  const beforeHash = "a".repeat(64);
+  const afterHash = "b".repeat(64);
+  const event = {
+    id: 91, post_type: "mec-events", status: "draft", title: "Old event", content: "Body",
+    start_date: "2026-10-09", end_date: "2026-10-11", start_time: "08:00 AM", end_time: "06:00 PM",
+    featured_media: 0, repeat: { enabled: false },
+  };
+  const calls = [];
+  const wordpress = {
+    ...unusedWordPress(),
+    wpCalendarHelperRequest: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (!options.body) return { data: { event, calendar_sha256: beforeHash, items: [{ event, calendar_sha256: beforeHash }] }, headers: new Headers() };
+      const next = { ...event, ...options.body, status: options.body.status || event.status };
+      return { data: { event: next, calendar_sha256: afterHash }, headers: new Headers() };
+    },
+  };
+  await withBridge({ cfg: baseConfig({ calendarEnabled: true, allowPublish: true }), wordpress }, async (base) => {
+    const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+    const listed = await fetch(`${base}/v1/calendar/events?category_id=4&per_page=50`, { headers });
+    assert.equal(listed.status, 200);
+    assert.equal(calls[0].path, "/wp-json/wpbridge/v1/calendar/events?per_page=50&page=1&status=publish&category_id=4");
+
+    const created = await fetch(`${base}/v1/calendar/events`, { method: "POST", headers, body: JSON.stringify({ title: "New event", idempotency_key: "calendar-create-001" }) });
+    assert.equal(created.status, 201);
+    assert.equal(calls[1].options.body.idempotency_key, undefined);
+
+    const edited = await fetch(`${base}/v1/calendar/events/91`, { method: "POST", headers, body: JSON.stringify({ title: "Edited", expected_calendar_sha256: beforeHash }) });
+    assert.equal(edited.status, 200);
+    assert.equal(calls[3].options.body.expected_calendar_sha256, beforeHash);
+
+    const published = await fetch(`${base}/v1/calendar/events/91/publish`, { method: "POST", headers, body: JSON.stringify({ confirm: "PUBLISH", expected_calendar_sha256: afterHash }) });
+    assert.equal(published.status, 200);
+    assert.equal(calls[4].options.body.status, "publish");
   });
 });
 

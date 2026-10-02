@@ -16,8 +16,305 @@ components:
       type: http
       scheme: bearer
       bearerFormat: API key
-  schemas: {}
+  schemas:
+    CalendarEvent:
+      type: object
+      additionalProperties: true
+      properties:
+        id: {type: integer}
+        post_type: {type: string, enum: [mec-events]}
+        status: {type: string}
+        title: {type: string}
+        content: {type: string}
+        start_date: {type: string, format: date}
+        end_date: {type: string, format: date}
+        start_time: {type: string}
+        end_time: {type: string}
+        featured_media: {type: integer, minimum: 0}
+        calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+    CalendarTerm:
+      type: object
+      additionalProperties: true
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        slug: {type: string}
+        taxonomy: {type: string}
 paths:
+  /v1/calendar/capabilities:
+    get:
+      operationId: calendarHealth
+      summary: Discover calendar controls.
+      description: Reports MEC availability, supported event fields, repeat types, and excluded booking data.
+      responses:
+        '200': {description: Calendar capability details.}
+        '503': {description: MEC helper is not installed or calendar controls are disabled.}
+  /v1/calendar/events:
+    get:
+      operationId: listCalendarEvents
+      summary: List calendar events.
+      description: Lists MEC events with status, date, search, category, location, and organizer filters. Results are capped at 50 per page.
+      parameters:
+      - {name: per_page, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+      - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+      - {name: status, in: query, schema: {type: string, enum: [publish, draft, pending, future, private, all], default: publish}}
+      - {name: search, in: query, schema: {type: string, maxLength: 200}}
+      - {name: start_after, in: query, schema: {type: string, format: date}}
+      - {name: start_before, in: query, schema: {type: string, format: date}}
+      - {name: category_id, in: query, schema: {type: integer, minimum: 1}}
+      - {name: location_id, in: query, schema: {type: integer, minimum: 1}}
+      - {name: organizer_id, in: query, schema: {type: integer, minimum: 1}}
+      - {name: orderby, in: query, schema: {type: string, enum: [date, modified, title, ID]}}
+      - {name: order, in: query, schema: {type: string, enum: [ASC, DESC]}}
+      responses:
+        '200': {description: Paginated normalized calendar events and version hashes.}
+    post:
+      operationId: createCalendarEvent
+      summary: Create a calendar event draft.
+      description: Creates a draft or pending MEC event through the plugin save path. Supply an Idempotency-Key header for safe retries.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: {type: string, maxLength: 500}
+                content: {type: string, maxLength: 1000000}
+                excerpt: {type: string, maxLength: 20000}
+                status: {type: string, enum: [draft, pending], default: draft}
+                start_date: {type: string, format: date}
+                start_time: {type: string}
+                end_date: {type: string, format: date}
+                end_time: {type: string}
+                all_day: {type: boolean}
+                hide_time: {type: boolean}
+                hide_end_time: {type: boolean}
+                time_comment: {type: string, maxLength: 500}
+                timezone: {type: string, maxLength: 100}
+                repeat: {type: object, additionalProperties: true, properties: {}}
+                author_id: {type: integer, minimum: 1}
+                location_id: {type: integer, minimum: 0}
+                organizer_id: {type: integer, minimum: 0}
+                category_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                label_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                tag_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                featured_media: {type: integer, minimum: 0}
+                gallery_media_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                more_info: {type: string, maxLength: 1000}
+                more_info_title: {type: string, maxLength: 300}
+                more_info_target: {type: string, maxLength: 20}
+                read_more: {type: string, maxLength: 1000}
+                cost: {type: string, maxLength: 100}
+                color: {type: string, maxLength: 16}
+                idempotency_key: {type: string, minLength: 8, maxLength: 200}
+      responses:
+        '201': {description: Created calendar event and calendar_sha256.}
+        '409': {description: Missing or reused idempotency key.}
+  /v1/calendar/events/{event_id}:
+    get:
+      operationId: getCalendarEvent
+      summary: Read one calendar event.
+      description: Returns normalized MEC fields and a calendar_sha256 optimistic-lock value.
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      responses:
+        '200': {description: Calendar event and version hash.}
+    post:
+      operationId: updateCalendarEvent
+      summary: Edit a calendar event.
+      description: Updates fixed MEC editorial fields through save_event. Requires the latest calendar_sha256 and never changes visibility.
+      x-openai-isConsequential: true
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_calendar_sha256]
+              properties:
+                expected_calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+                title: {type: string, maxLength: 500}
+                content: {type: string, maxLength: 1000000}
+                excerpt: {type: string, maxLength: 20000}
+                start_date: {type: string, format: date}
+                start_time: {type: string}
+                end_date: {type: string, format: date}
+                end_time: {type: string}
+                all_day: {type: boolean}
+                hide_time: {type: boolean}
+                hide_end_time: {type: boolean}
+                time_comment: {type: string, maxLength: 500}
+                timezone: {type: string, maxLength: 100}
+                repeat: {type: object, additionalProperties: true, properties: {}}
+                author_id: {type: integer, minimum: 1}
+                location_id: {type: integer, minimum: 0}
+                organizer_id: {type: integer, minimum: 0}
+                category_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                label_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                tag_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                speaker_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                sponsor_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                featured_media: {type: integer, minimum: 0}
+                gallery_media_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                more_info: {type: string, maxLength: 1000}
+                more_info_title: {type: string, maxLength: 300}
+                more_info_target: {type: string, maxLength: 20}
+                read_more: {type: string, maxLength: 1000}
+                cost: {type: string, maxLength: 100}
+                color: {type: string, maxLength: 16}
+      responses:
+        '200': {description: Updated calendar event and new version hash.}
+        '409': {description: Stale calendar hash or live editing is disabled.}
+  /v1/calendar/events/{event_id}/preview:
+    post:
+      operationId: previewCalendarEventEdit
+      summary: Preview a calendar edit.
+      description: Compares proposed fixed-field changes with the latest event without writing.
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              required: [expected_calendar_sha256]
+              properties:
+                expected_calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+                title: {type: string, maxLength: 500}
+                content: {type: string, maxLength: 1000000}
+                start_date: {type: string, format: date}
+                start_time: {type: string}
+                end_date: {type: string, format: date}
+                end_time: {type: string}
+                all_day: {type: boolean}
+                repeat: {type: object, additionalProperties: true, properties: {}}
+                author_id: {type: integer, minimum: 1}
+                location_id: {type: integer, minimum: 0}
+                organizer_id: {type: integer, minimum: 0}
+                category_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+                featured_media: {type: integer, minimum: 0}
+                gallery_media_ids: {type: array, maxItems: 100, items: {type: integer, minimum: 1}}
+      responses:
+        '200': {description: Current event, proposed event, changed fields, and warnings.}
+  /v1/calendar/events/{event_id}/publish:
+    post:
+      operationId: publishCalendarEvent
+      summary: Publish a calendar event.
+      description: Publishes only with ALLOW_PUBLISH, explicit confirmation, and a current calendar_sha256.
+      x-openai-isConsequential: true
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm, expected_calendar_sha256]
+              properties:
+                confirm: {type: string, enum: [PUBLISH]}
+                expected_calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {description: Published calendar event.}
+        '403': {description: Publishing is disabled.}
+  /v1/calendar/events/{event_id}/unpublish:
+    post:
+      operationId: unpublishCalendarEvent
+      summary: Return a calendar event to draft.
+      description: Unpublishes only with ALLOW_PUBLISH, explicit confirmation, and a current calendar_sha256.
+      x-openai-isConsequential: true
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm, expected_calendar_sha256]
+              properties:
+                confirm: {type: string, enum: [UNPUBLISH]}
+                expected_calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {description: Draft calendar event.}
+  /v1/calendar/events/{event_id}/schedule:
+    post:
+      operationId: scheduleCalendarEvent
+      summary: Schedule a calendar event.
+      description: Schedules a draft or pending event at a future UTC time with confirmation and optimistic locking.
+      x-openai-isConsequential: true
+      parameters:
+      - {name: event_id, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirm, scheduled_for_gmt, expected_calendar_sha256]
+              properties:
+                confirm: {type: string, enum: [SCHEDULE]}
+                scheduled_for_gmt: {type: string, format: date-time}
+                expected_calendar_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+      responses:
+        '200': {description: Scheduled calendar event.}
+  /v1/calendar/taxonomies/{taxonomy}/terms:
+    get:
+      operationId: listCalendarTerms
+      summary: List calendar taxonomy terms.
+      description: Lists categories, locations, organizers, labels, speakers, sponsors, or tags used by MEC.
+      parameters:
+      - {name: taxonomy, in: path, required: true, schema: {type: string, enum: [categories, locations, organizers, labels, speakers, sponsors, tags]}}
+      - {name: per_page, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+      - {name: search, in: query, schema: {type: string, maxLength: 200}}
+      responses:
+        '200': {description: Calendar taxonomy terms.}
+    post:
+      operationId: createCalendarTerm
+      summary: Create a calendar taxonomy term.
+      description: Creates an MEC category, location, organizer, label, speaker, sponsor, or tag with optional term metadata.
+      x-openai-isConsequential: true
+      parameters:
+      - {name: taxonomy, in: path, required: true, schema: {type: string, enum: [categories, locations, organizers, labels, speakers, sponsors, tags]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, maxLength: 200}
+                slug: {type: string, maxLength: 200}
+                description: {type: string, maxLength: 20000}
+                address: {type: string, maxLength: 1000}
+                latitude: {type: string, maxLength: 100}
+                longitude: {type: string, maxLength: 100}
+                tel: {type: string, maxLength: 200}
+                email: {type: string, maxLength: 200}
+                url: {type: string, maxLength: 1000}
+                thumbnail: {type: string, maxLength: 1000}
+                opening_hour: {type: string, maxLength: 1000}
+                job_title: {type: string, maxLength: 300}
+                website: {type: string, maxLength: 1000}
+                type: {type: string, maxLength: 100}
+                idempotency_key: {type: string, minLength: 8, maxLength: 200}
+      responses:
+        '201': {description: Created calendar term.}
   /health:
     get:
       operationId: bridgeHealth

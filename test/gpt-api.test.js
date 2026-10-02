@@ -23,11 +23,11 @@ function assertObjectSchemasHaveProperties(value, context = "schema") {
   for (const [key, child] of Object.entries(value)) assertObjectSchemasHaveProperties(child, `${context}.${key}`);
 }
 
-test("GPT schema has 12 grouped operations plus direct conversation-file upload", () => {
+test("GPT schema has grouped operations plus direct conversation-file upload", () => {
   const schema = buildGptSchema("https://example.test");
-  assert.equal(Object.keys(schema.paths).length, 13);
-  assert.equal(operations.size, 89);
-  assert.deepEqual(schema.components.schemas, {});
+  assert.equal(Object.keys(schema.paths).length, 14);
+  assert.equal(operations.size, 100);
+  assert.ok(schema.components.schemas.CalendarEvent);
   for (const [route, item] of Object.entries(schema.paths)) {
     for (const [method, operation] of Object.entries(item)) {
       assert.ok(

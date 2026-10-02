@@ -32,6 +32,18 @@ test("boolean settings are explicit", () => {
   assert.throws(() => parseBooleanSetting({ FLAG: "yes" }, "FLAG"), /true or false/);
 });
 
+test("calendar controls are disabled by default and explicitly enabled", () => {
+  const base = {
+    WP_URL: "https://example.test/wordpress",
+    WP_USERNAME: "bridge",
+    WP_APP_PASSWORD: "app-password",
+    BRIDGE_API_KEY: "k".repeat(40),
+  };
+  assert.equal(loadConfig(base).calendarEnabled, false);
+  assert.equal(loadConfig({ ...base, CALENDAR_ENABLED: "true" }).calendarEnabled, true);
+  assert.throws(() => loadConfig({ ...base, CALENDAR_ENABLED: "yes" }), /CALENDAR_ENABLED must be either true or false/);
+});
+
 test("WordPress subdirectory is preserved in REST targets", () => {
   const wpUrl = normalizeWpUrl("https://example.test/wordpress/");
   assert.equal(wpUrl, "https://example.test/wordpress");
