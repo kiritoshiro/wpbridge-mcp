@@ -169,6 +169,9 @@ def check_page(opener, path, label=None):
     label = label or path
     if status != 200:
         fail(f"{label}: HTTP {status}")
+        # The text of the error page (throwaway site), to show why.
+        text = re.sub(r"\s+", " ", re.sub(r"<(script|style)\b.*?</\1>|<[^>]+>", " ", body, flags=re.S | re.I))
+        print(f"    page text: {html.unescape(text).strip()[:600]}")
     elif PAGE_ERROR.search(body):
         fail(f"{label}: page shows a PHP error or the critical-error screen")
     else:
@@ -208,49 +211,67 @@ def main():
                                        "redirect_to": BASE + "/wp-admin/", "testcookie": "1"}).encode()
         status, final, body = get(opener, "/wp-login.php", data=form)
         if "/wp-admin" not in final:
-            sys.exit("::error::could not log in to the Playground site")
-
-        plugins_page = check_page(opener, "/wp-admin/plugins.php", "plugins.php")
-        for plugin in config.get("plugins", []):
-            slug = plugin.split("/")[0]
-            row = re.search(r'<tr class="([^"]*)"[^>]*data-slug="%s"' % re.escape(slug), plugins_page) \
-                or re.search(r'<tr class="([^"]*)"[^>]*data-plugin="%s"' % re.escape(plugin), plugins_page)
-            if not row or "inactive" in row.group(1).split() or "active" not in row.group(1).split():
-                fail(f"{plugin} is not active")
-
-        dashboard = check_page(opener, "/wp-admin/", "dashboard")
-        menu = MenuLinks()
-        menu.feed(dashboard)
-        seen = set()
-        for href in menu.links:
-            url = urllib.parse.urljoin(BASE + "/wp-admin/", href)
-            if not url.startswith(BASE + "/wp-admin/") or ADMIN_SKIP.search(url) or url in seen:
-                continue
-            seen.add(url)
-            check_page(opener, url, url[len(BASE):])
-        for extra in config.get("paths", []):
-            check_page(opener, extra)
-        print(f"Visited {len(seen)} admin menu pages.")
+            # Keep going to the debug.log report, which usually says why.
+            fail(f"could not log in to the Playground site (HTTP {status})")
+            return
+        check_admin(opener, config)
     finally:
         stop_server(proc)
+        report_log(logs_dir, config)
+        shutil.rmtree(workdir, ignore_errors=True)
 
+
+def check_admin(opener, config):
+    plugins_page = check_page(opener, "/wp-admin/plugins.php", "plugins.php")
+    for plugin in config.get("plugins", []):
+        slug = plugin.split("/")[0]
+        row = re.search(r'<tr class="([^"]*)"[^>]*data-slug="%s"' % re.escape(slug), plugins_page) \
+            or re.search(r'<tr class="([^"]*)"[^>]*data-plugin="%s"' % re.escape(plugin), plugins_page)
+        if not row or "inactive" in row.group(1).split() or "active" not in row.group(1).split():
+            fail(f"{plugin} is not active")
+
+    dashboard = check_page(opener, "/wp-admin/", "dashboard")
+    menu = MenuLinks()
+    menu.feed(dashboard)
+    seen = set()
+    for href in menu.links:
+        url = urllib.parse.urljoin(BASE + "/wp-admin/", href)
+        if not url.startswith(BASE + "/wp-admin/") or ADMIN_SKIP.search(url) or url in seen:
+            continue
+        seen.add(url)
+        check_page(opener, url, url[len(BASE):])
+    for extra in config.get("paths", []):
+        check_page(opener, extra)
+    print(f"Visited {len(seen)} admin menu pages.")
+
+
+def report_log(logs_dir, config):
     log_path = os.path.join(logs_dir, "debug.log")
     watch = config.get("watch", [])
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if not PHP_LOG_LINE.search(line):
-                    continue
-                if any(w in line for w in watch):
-                    fail("debug.log: " + line.strip()[:400])
-                else:
-                    print("::warning::debug.log (not this repository's code): " + line.strip()[:300])
-    shutil.rmtree(workdir, ignore_errors=True)
+    if not os.path.exists(log_path):
+        return
+    seen = set()
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not PHP_LOG_LINE.search(line):
+                continue
+            message = line.split("] ", 1)[-1].strip()  # drop the timestamp
+            if message in seen:
+                continue  # the same error on every request
+            seen.add(message)
+            # Bundled third-party code (Composer/npm packages) is reported, not failed.
+            if any(w in line for w in watch) and not re.search(r"/(vendor|node_modules)/", message):
+                fail("debug.log: " + message[:400])
+            else:
+                print("::warning::debug.log (not this repository's own code): " + message[:300])
 
+
+def run():
+    main()
     if failures:
         sys.exit(f"{len(failures)} smoke-test failure(s)")
     print("Playground smoke test passed.")
 
 
 if __name__ == "__main__":
-    main()
+    run()
