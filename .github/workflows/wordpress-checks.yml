@@ -1,0 +1,75 @@
+name: WordPress checks
+
+on:
+  pull_request:
+    branches: ['main']
+  push:
+    branches: ['main']
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: wordpress-checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plugin-check:
+    name: Plugin Check (${{ matrix.slug }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: wordpress/wpbridge-alps-helper
+            slug: wpbridge-alps-helper
+          - dir: wordpress/wpbridge-control
+            slug: wpbridge-control
+          - dir: wordpress/wpbridge-mec-helper
+            slug: wpbridge-mec-helper
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The official Plugin Check, in a throwaway WordPress (wp-env). It fails on
+      # errors and annotates warnings. The plugin_repo category is left out: it
+      # holds WordPress.org listing rules (no own updater, license header,
+      # readme format), and these plugins are self-hosted. "slug" is the text
+      # domain, so translation calls are checked against it.
+      - name: WordPress Plugin Check
+        uses: WordPress/plugin-check-action@10857da14b6c2246d15402b3e69f777edcf8c12e # v1.1.9
+        with:
+          build-dir: ${{ matrix.dir }}
+          slug: ${{ matrix.slug }}
+          categories: general,security,performance,accessibility
+          exclude-directories: .github,tests,docs,bin,scripts,node_modules,vendor
+
+  playground:
+    name: Playground smoke test (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.4']
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # Boots WordPress in WordPress Playground (PHP compiled to WebAssembly, no
+      # database server), activates this code, then loads the front end and
+      # every wp-admin menu page. See .github/playground/smoke.py.
+      - name: Boot WordPress Playground and load every page
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: python3 .github/playground/smoke.py --php "$PHP_VERSION"
