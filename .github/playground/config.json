@@ -1,0 +1,26 @@
+{
+  "mounts": [
+    {
+      "host": "wordpress/wpbridge-alps-helper",
+      "vfs": "/wordpress/wp-content/plugins/wpbridge-alps-helper"
+    },
+    {
+      "host": "wordpress/wpbridge-control",
+      "vfs": "/wordpress/wp-content/plugins/wpbridge-control"
+    },
+    {
+      "host": "wordpress/wpbridge-mec-helper",
+      "vfs": "/wordpress/wp-content/plugins/wpbridge-mec-helper"
+    }
+  ],
+  "plugins": [
+    "wpbridge-alps-helper/wpbridge-alps-helper.php",
+    "wpbridge-control/wpbridge-control.php",
+    "wpbridge-mec-helper/wpbridge-mec-helper.php"
+  ],
+  "watch": [
+    "/wordpress/wp-content/plugins/wpbridge-alps-helper/",
+    "/wordpress/wp-content/plugins/wpbridge-control/",
+    "/wordpress/wp-content/plugins/wpbridge-mec-helper/"
+  ]
+}

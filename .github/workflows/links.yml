@@ -1,0 +1,43 @@
+name: Links
+
+# Checks the links in Markdown and readme.txt files with lychee: on pull
+# requests that touch them, monthly (links rot without code changes), and on
+# demand. Not part of the security gate: a third-party site being down should
+# not block a merge. Exclusions and retries live in .lychee.toml.
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '**/readme.txt'
+      - '.lychee.toml'
+      - '.github/workflows/links.yml'
+  schedule:
+    - cron: '59 5 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: links-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lychee:
+    name: Link check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check links in Markdown and readme.txt files
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: --config .lychee.toml --no-progress './**/*.md' './**/readme.txt'
+          fail: true
+          failIfEmpty: false
+          jobSummary: true
