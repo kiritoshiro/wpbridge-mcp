@@ -20,7 +20,7 @@
     "check:openapi": "node scripts/check-openapi.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "jose": "^6.2.12",
     "sharp": "0.35.4",
     "yaml": "2.9.0",
