@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServer } from "../mcp/server.js";
@@ -23,7 +22,8 @@ function sampleSites() {
 }
 
 test("site registry rejects external targets and missing credentials", () => {
-  const file = path.join(os.tmpdir(), `wpbridge-mcp-${crypto.randomUUID()}.json`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wpbridge-mcp-"));
+  const file = path.join(dir, "sites.json");
   try {
     fs.writeFileSync(file, JSON.stringify({ sites: [{
       id: "alpha", bridge_url: "https://example.com", bridge_key_env: "SITE_KEY", permissions: ["read"],
@@ -41,7 +41,7 @@ test("site registry rejects external targets and missing credentials", () => {
     assert.throws(() => loadSites(file, { SITE_KEY: keyA, CONTROL_KEY: keyA }), /must differ/);
     assert.equal(loadSites(file, { SITE_KEY: keyA, CONTROL_KEY: "c".repeat(64) })[0].id, "alpha");
   } finally {
-    if (fs.existsSync(file)) fs.unlinkSync(file);
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

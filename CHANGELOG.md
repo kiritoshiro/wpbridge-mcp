@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Security: parse `Authorization: Bearer` headers with a linear-time pattern in
+  one shared helper. The old pattern took seconds on long whitespace-padded
+  headers before authentication (CodeQL `js/polynomial-redos`). Upstream error
+  messages also drop stray angle brackets, and tests use private temp folders.
 - Raise decoded image/audio/PDF upload and conversation-source limits to 30 MB;
   increase the JSON body allowance to 42 MB for base64 expansion while keeping
   OpenAI `openaiFileResponse` downloads at their provider-defined 10 MB limit.

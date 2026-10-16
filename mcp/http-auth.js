@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { safeEqual } from "../lib/auth.js";
+import { bearerToken, safeEqual } from "../lib/auth.js";
 
 export function createHttpAuth(env = process.env) {
   const issuer = String(env.WPBRIDGE_MCP_OAUTH_ISSUER || "");
@@ -25,7 +25,7 @@ export function createHttpAuth(env = process.env) {
       },
       challenge: `Bearer resource_metadata="${resource.origin}/.well-known/oauth-protected-resource", scope="${scope}"`,
       async authorized(header) {
-        const token = String(header || "").match(/^Bearer\s+(.+)$/i)?.[1];
+        const token = bearerToken(header);
         if (!token) return false;
         try {
           const { payload } = await jwtVerify(token, jwks, { issuer, audience });
@@ -39,8 +39,7 @@ export function createHttpAuth(env = process.env) {
   return {
     mode: "local-token", securitySchemes: null, resourceMetadata: null, challenge: "Bearer",
     authorized: async (header) => {
-      const bearer = String(header || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
-      return safeEqual(bearer, token);
+      return safeEqual(bearerToken(header), token);
     },
   };
 }
