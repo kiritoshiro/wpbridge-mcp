@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "jose": "^6.2.12",
+    "jose": "^6.2.13",
     "sharp": "0.35.5",
     "yaml": "2.9.1",
     "yauzl": "3.4.0",
