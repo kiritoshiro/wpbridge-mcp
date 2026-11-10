@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "mcp": "node mcp/server.js --stdio",
+    "mcp:configure-local": "node scripts/configure-local-plugin.mjs",
     "mcp:http": "node mcp/server.js --http",
     "check": "node scripts/check-syntax.mjs",
     "generate-key": "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",

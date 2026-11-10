@@ -1,67 +1,54 @@
-# WPBridge MCP and plugin setup
+# WPBridge MCP setup
 
-This repository contains three new parts: `mcp/` (the multi-site MCP gateway), `plugins/wpbridge/` (the Codex/ChatGPT workflow package), and `wordpress/wpbridge-control/` (a WordPress companion for selected site settings and plugin updates). The existing bridge remains the editorial engine. Each site has its own running bridge instance, keys, WordPress accounts, and enabled actions.
+This repository has three cooperating parts: the per-site WPBridge service, the multi-site MCP gateway in `mcp/`, and the Codex plugin in `plugins/wpbridge/`. The optional `wordpress/wpbridge-control/` companion adds a limited set of site-maintenance actions. Enrolling a site is explicit: a site does not become available just because the plugin is installed. The older Custom GPT bridge can keep running while you test this repository separately.
 
-## 1. Install the code
+## 1. Prepare one site
 
-On main, run npm ci. Set PUBLIC_BASE_URL to the intended HTTPS bridge origin, then run npm run ci. The plugin's .mcp.json contains an example absolute path; set args[0] to this checkout's mcp/server.js before installing the plugin. Do not commit .env files or mcp/sites.local.json.
+Install Node.js 20 or newer, clone this repository, and run `npm ci` in the checkout. For the existing editorial actions, create a dedicated WordPress user with an Application Password. Copy the root `.env.example` to `.env` and set that site's `WP_URL`, `WP_USERNAME`, `WP_APP_PASSWORD`, and a unique `BRIDGE_API_KEY`. Start the bridge with `npm start` and check its loopback `/health` endpoint. Use a separate checkout/process, port, WordPress account, and keys for each site. Do not copy credentials from another site or from an older bridge automatically.
 
-Run a separate bridge instance for each enrolled site and verify its configuration before enabling site control.
+For optional site control, install `wordpress/wpbridge-control/` as a WordPress plugin on that site. Use a separate account with the required capabilities and add `SITE_CONTROL_API_KEY`, `WP_CONTROL_USERNAME`, and `WP_CONTROL_APP_PASSWORD` to **that site's bridge** `.env`. The companion needs `manage_options` for settings, `activate_plugins` to list plugins, and `update_plugins` to update one plugin. It can change only title, tagline, timezone, and posts per page; it cannot install/remove plugins, edit themes or menus, manage users, or make backups. Take a restorable backup before plugin updates.
 
-## 2. Configure each WordPress site and bridge
+## 2. Enroll the site in the MCP gateway
 
-For editorial access, use the existing WPBridge setup: a dedicated WordPress user with an Application Password, `WP_URL`, `WP_USERNAME`, `WP_APP_PASSWORD`, and `BRIDGE_API_KEY` in that site's bridge `.env`. Start each bridge separately and check its `/health` endpoint locally.
+Copy `mcp/sites.example.json` to `mcp/sites.local.json` and `mcp/.env.example` to `mcp/.env`. Both destination files are Git ignored. Give each site a stable `id`, a loopback `bridge_url`, a `bridge_key_env` name, and only the permission classes you want. Put the matching **editorial** `BRIDGE_API_KEY` value in that named variable in `mcp/.env`. For `site_read`, `site_settings`, or `plugin_updates`, also set `control_key_env` and its matching site-control key. The gateway rejects non-loopback bridge URLs and missing keys.
 
-To use site control, install the `wordpress/wpbridge-control` folder as a WordPress plugin on that site. Create a separate WordPress administrator or a dedicated account with the required capabilities and give it its own Application Password. Add these values to **that site's bridge** `.env`:
+Permission classes are `read`, `editorial`, `publish`, `site_read`, `site_settings`, and `plugin_updates`. An optional `allowed_actions` list narrows actions further. The per-site bridge's `ALLOW_PUBLISH` and `ALLOW_LIVE_EDITS` switches remain in force. To disconnect a site, remove its registry entry and restart MCP; rotate its keys if they may have been exposed. Generate distinct keys with `npm run generate-key`; keep all keys out of Git and chat.
 
-```dotenv
-SITE_CONTROL_API_KEY=<new random 32-byte-or-longer secret>
-WP_CONTROL_USERNAME=<site-control account username>
-WP_CONTROL_APP_PASSWORD=<site-control Application Password>
+## 3. Connect Codex locally
+
+The Codex plugin launches MCP over stdio. From this checkout, run:
+
+```powershell
+npm ci
+npm run mcp:configure-local
+codex plugin marketplace add .
+codex plugin add wpbridge@personal
 ```
 
-The companion requires `manage_options` for site settings, `activate_plugins` to list plugins, and `update_plugins` to update one. Its site-setting API changes only title, tagline, timezone, and posts per page. It does not install or remove plugins, edit themes/templates/menus, manage users, or provide a site backup. Use a recent restorable backup before plugin updates.
+`mcp:configure-local` writes **only the absolute checkout path**, not credentials, to `~/.wpbridge-mcp/local.json` (on Windows, under your user profile). The installed plugin reads this stable per-user file, so it works after Codex copies the plugin into its cache. If you move the checkout, run the configuration command again. A new Codex task loads the installed plugin. If this marketplace was already added, skip `marketplace add`; after changing plugin code, reinstall the plugin and start a new task. This repository marketplace is named `personal`; check the name in `.agents/plugins/marketplace.json` before installing.
 
-Generate a different random key for every site's editorial bridge, every site's control bridge, and the MCP HTTP endpoint. WPBridge already has `npm run generate-key` for this. Keep the keys out of chat and Git.
+To test the gateway without installing the Codex plugin, run `npm run mcp` for stdio. For a local HTTP MCP client, set a random 32-character-or-longer `WPBRIDGE_MCP_TOKEN` in `mcp/.env`, then run `npm run mcp:http`; it listens only on `http://127.0.0.1:8790/mcp` by default. The local token is not a ChatGPT OAuth substitute.
 
-## 3. Enroll sites in MCP
+In the client, call `list_sites`, then try `wpbridge_contentRead` with a returned `site_id` and `action: listPosts`. Check that an action absent from `allowed_actions` is refused. Before enabling writes, test a draft and its preview/version checks on one site at a time. Installing the plugin by itself does not start the per-site bridge processes.
 
-Copy `mcp/sites.example.json` to `mcp/sites.local.json`. Copy `mcp/.env.example` to `mcp/.env`. Both destination files are Git ignored.
+## 4. Prepare remote ChatGPT access
 
-For each site, set `id` (the name used in tool calls), fixed loopback `bridge_url`, `bridge_key_env`, and its permissions. Put the matching **editorial bridge key** in the named variable in `mcp/.env`. For a site with `site_read`, `site_settings`, or `plugin_updates`, also set `control_key_env` and its matching **site-control key**. The gateway refuses non-loopback bridge URLs and missing keys.
+Remote access needs two services that this repository does not create: a stable HTTPS address for `/mcp`, and an OAuth 2.1 identity provider. Until both exist, use the local path above and leave OAuth variables unset. Do not point a public tunnel at the old bridge or expose the MCP loopback port directly.
 
-`allowed_actions` is optional. If present, it is an additional action allowlist. If omitted, the site's permission classes decide which WPBridge actions are available. Available classes are `read`, `editorial`, `publish`, `site_read`, `site_settings`, and `plugin_updates`. The existing bridge's `ALLOW_PUBLISH` and `ALLOW_LIVE_EDITS` switches still apply. To revoke one site immediately, remove its entry and restart the MCP process; rotate its keys if they may have been exposed.
-
-The sample configuration is intentionally narrow. Add site permissions and actions only after testing that site. `list_sites` returns IDs and permission classes without secrets.
-
-## 4. Run and connect locally
-
-`npm run mcp` starts an MCP server over stdio. In Codex, open this repository and install `wpbridge` from its local repository marketplace (`.agents/plugins/marketplace.json`), or configure an MCP server whose command is `node` and whose arguments are the absolute path to `mcp/server.js` plus `--stdio`. The package includes a workflow skill and a local `.mcp.json` entry pointing at this checkout. Restart Codex after changing the plugin or site registry.
-
-Run `npm run mcp:http` for a loopback HTTP endpoint at `http://127.0.0.1:8790/mcp`. It requires a 32-character-or-longer `WPBRIDGE_MCP_TOKEN` from `mcp/.env`. This mode is suitable for local MCP clients that can send a Bearer header. The endpoint refuses a non-loopback bind.
-
-Try `list_sites`, then a read action such as `wpbridge_contentRead` with `site_id` and `action: listPosts`. Verify that a disabled action is refused. Test an edit with a draft and a fresh preview token before enabling publishing or maintenance.
-
-## 5. Connect ChatGPT Work remotely
-
-ChatGPT needs a stable HTTPS MCP URL and OAuth 2.1; it cannot send an arbitrary static API key. Put a TLS reverse proxy or named tunnel in front of the loopback HTTP MCP endpoint. Configure an OAuth provider that supports MCP authorization-code + PKCE and publishes authorization-server metadata and JWKS. Give the provider an API audience for the MCP URL and a `wpbridge:access` scope. Set the following in `mcp/.env`:
+Put a TLS reverse proxy or named HTTPS tunnel in front of the **new** loopback MCP HTTP process. Route only `/mcp` and `/.well-known/oauth-protected-resource` to it. Configure an established identity provider with authorization-code + PKCE S256, authorization-server metadata, a JWKS endpoint, and a client registration method supported by ChatGPT. Its access token must contain the MCP resource as its audience and the `wpbridge:access` scope. Use the exact subject of the owner account that may operate these sites. Set these values in the new checkout's `mcp/.env`:
 
 ```dotenv
 WPBRIDGE_MCP_OAUTH_ISSUER=https://issuer.example/
 WPBRIDGE_MCP_OAUTH_AUDIENCE=https://mcp.example.com/mcp
 WPBRIDGE_MCP_OAUTH_SUBJECT=<exact owner subject claim>
-WPBRIDGE_MCP_OAUTH_JWKS_URL=https://issuer.example/.well-known/jwks.json
+WPBRIDGE_MCP_OAUTH_JWKS_URL=https://issuer.example/jwks.json
 WPBRIDGE_MCP_PUBLIC_URL=https://mcp.example.com/mcp
 ```
 
-When `WPBRIDGE_MCP_OAUTH_ISSUER` is set, the gateway validates signature, issuer, audience, exact owner subject, and scope. It serves `/.well-known/oauth-protected-resource` for client discovery. The OAuth provider must support the ChatGPT client registration method in current OpenAI documentation. Register the HTTPS `/mcp` URL in ChatGPT developer mode, complete OAuth, and add the `manage-wordpress` skill from this package to the resulting personal plugin. Do not publish the plugin before testing all required workflows. This repository does not create the external identity-provider account, HTTPS route, or live WordPress credentials.
+When OAuth is configured, MCP checks the token signature, issuer, audience, expiration, exact owner subject, and scope for every request. It publishes protected-resource metadata at `/.well-known/oauth-protected-resource` and challenges unauthenticated requests. Verify that an unauthenticated POST to `/mcp` returns 401 and a `WWW-Authenticate` header, and that the metadata resource and issuer match the configured HTTPS URLs. Then register the HTTPS `/mcp` URL in ChatGPT developer mode, complete OAuth, and test `list_sites` and a read action before enabling any write class. Follow the [current OpenAI authentication guide](https://developers.openai.com/plugins/build/auth) for the provider's client registration and callback requirements and the [connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt) for ChatGPT testing. Keep the plugin private until the end-to-end connection is verified.
 
-## 6. Verify and operate
+## 5. Validate and operate
 
-Run `npm run ci`, `php -l wordpress/wpbridge-control/wpbridge-control.php`, and the plugin validator shown below. Test each enrolled site separately. Confirm that a key for one site cannot act on the other, an editor credential cannot use site control, and stale fingerprints or versions are rejected. Review the existing bridge logs and WordPress state after each write. The companion plugin does not provide a backup or rollback for a plugin upgrade.
+Set `PUBLIC_BASE_URL` to an HTTPS bridge origin and run `npm run ci`. Also run `php -l wordpress/wpbridge-control/wpbridge-control.php` and validate the plugin with `python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge`. The automated suite exercises the installed-style stdio launcher, authenticated HTTP transport, gateway routing, and signed OAuth token checks. It does not prove a live WordPress or ChatGPT connection; test each enrolled site separately, including cross-site key isolation and stale preview/version rejection.
 
-```powershell
-python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge
-```
-
-MCP `upload_attached_media` adapts ChatGPT file inputs to WPBridge's existing attachment uploader. `downloadMedia` currently returns the existing GPT file-response URL as JSON; verify its behavior in the chosen MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.
+`upload_attached_media` adapts ChatGPT file inputs to WPBridge's attachment uploader. `downloadMedia` currently returns a file-response URL as JSON; verify it in your MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.
