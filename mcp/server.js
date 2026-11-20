@@ -13,6 +13,19 @@ import { idempotencyKeyPattern, readLocalMedia, resolveUploadDir } from "./local
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// Local uploads run one at a time per process. A call holds the file bytes, its
+// base64 copy and the JSON request body (about 110 MB at the 30 MB ceiling)
+// until the bridge answers, so concurrent calls could exhaust memory. Later calls
+// wait in order rather than fail, because agents often issue tool calls in
+// parallel; a waiting call holds only its arguments, and the gateway's request
+// timeout bounds how long each turn can take.
+let localUploadTail = Promise.resolve();
+export function serializeLocalUpload(task) {
+  const run = localUploadTail.then(task, task);
+  localUploadTail = run.then(() => {}, () => {});
+  return run;
+}
+
 function actionDescription(action) {
   const spec = operations.get(action)?.spec;
   const required = (spec?.parameters || []).filter((item) => item.required).map((item) => `${item.in}.${item.name}`);
@@ -84,10 +97,10 @@ export function buildMcpServer(gateway, { securitySchemes = null, localUploadDir
   if (localUploadDir) {
     server.registerTool("upload_local_media", {
       title: "Upload a local media file to one WordPress site",
-      description: "Upload one image, audio, or PDF file from the user's configured WPBridge upload directory to a connected site's Media Library. Pass a path relative to that directory. Use a new idempotency key for each logical upload and reuse it only to retry the same upload. The bridge validates file type, signature, and size.",
+      description: "Upload one image, audio, or PDF file from the user's configured WPBridge upload directory to a connected site's Media Library. Pass a path relative to that directory; absolute paths are refused. Uploads run one at a time, so a second call waits for the first to finish. Use a new idempotency key for each logical upload and reuse it only to retry the same upload. The bridge validates file type, signature, and size.",
       inputSchema: {
         site_id: z.string().describe("An ID returned by list_sites; never supply a website URL."),
-        file: z.string().describe("Path of the file inside the configured upload directory."),
+        file: z.string().describe("Path relative to the configured upload directory, for example photos/header.png. Absolute paths, .. segments, drive letters and UNC paths are refused."),
         idempotency_key: z.string().regex(idempotencyKeyPattern),
         title: z.string().max(500).optional(),
         alt_text: z.string().max(2000).optional(),
@@ -96,7 +109,9 @@ export function buildMcpServer(gateway, { securitySchemes = null, localUploadDir
         attached_to: z.number().int().min(0).optional(),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
-    }, async ({ site_id: siteId, file, idempotency_key: idempotencyKey, ...metadata }) => {
+    }, async ({ site_id: siteId, file, idempotency_key: idempotencyKey, ...metadata }, extra) => serializeLocalUpload(async () => {
+      // A call cancelled while it waited for its turn is not started.
+      if (extra?.signal?.aborted) return { content: [{ type: "text", text: "The upload was cancelled before it started." }], isError: true };
       let media;
       try {
         media = readLocalMedia(localUploadDir, file);
@@ -107,7 +122,7 @@ export function buildMcpServer(gateway, { securitySchemes = null, localUploadDir
         filename: media.filename, mime_type: media.mimeType, data_base64: media.data.toString("base64"),
         idempotency_key: idempotencyKey, ...metadata,
       } });
-    });
+    }));
   }
   return server;
 }

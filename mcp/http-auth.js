@@ -28,8 +28,8 @@ export function createHttpAuth(env = process.env, { jwks: suppliedJwks } = {}) {
         const token = bearerToken(header);
         if (!token) return false;
         try {
-          const { payload } = await jwtVerify(token, jwks, { issuer, audience });
-          return Number.isInteger(payload.exp) && payload.sub === subject &&
+          const { payload } = await jwtVerify(token, jwks, { issuer, audience, requiredClaims: ["exp"] });
+          return payload.sub === subject &&
             String(payload.scope || "").split(/\s+/).includes(scope);
         } catch { return false; }
       },

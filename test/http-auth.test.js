@@ -52,6 +52,17 @@ test("OAuth accepts only a signed token for this resource, owner, and scope", as
     .setProtectedHeader({ alg: "RS256", kid: "test-key" }).setIssuer(env.WPBRIDGE_MCP_OAUTH_ISSUER)
     .setAudience(env.WPBRIDGE_MCP_OAUTH_AUDIENCE).setIssuedAt().sign(privateKey);
   assert.equal(await auth.authorized(`Bearer ${noExpiry}`), false);
+  // RFC 7519 NumericDate may be fractional; a valid one is accepted.
+  const fractionalExpiry = await new SignJWT({ sub: "owner-123", scope: "wpbridge:access",
+    exp: Math.floor(Date.now() / 1000) + 300.5 })
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" }).setIssuer(env.WPBRIDGE_MCP_OAUTH_ISSUER)
+    .setAudience(env.WPBRIDGE_MCP_OAUTH_AUDIENCE).setIssuedAt().sign(privateKey);
+  assert.equal(await auth.authorized(`Bearer ${fractionalExpiry}`), true);
+  const fractionalExpired = await new SignJWT({ sub: "owner-123", scope: "wpbridge:access",
+    exp: Math.floor(Date.now() / 1000) - 300.5 })
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" }).setIssuer(env.WPBRIDGE_MCP_OAUTH_ISSUER)
+    .setAudience(env.WPBRIDGE_MCP_OAUTH_AUDIENCE).setIssuedAt().sign(privateKey);
+  assert.equal(await auth.authorized(`Bearer ${fractionalExpired}`), false);
   const wrongAudience = await new SignJWT({ sub: "owner-123", scope: "wpbridge:access" })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" }).setIssuer(env.WPBRIDGE_MCP_OAUTH_ISSUER)
     .setAudience("https://another.example/mcp").setIssuedAt().setExpirationTime("5m").sign(privateKey);

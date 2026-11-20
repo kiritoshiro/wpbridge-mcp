@@ -45,9 +45,36 @@ async function ready(child) {
     });
     child.once("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`MCP HTTP server exited ${code}: ${output}`));
+      reject(Object.assign(new Error(`MCP HTTP server exited ${code}: ${output}`),
+        { addressInUse: output.includes("EADDRINUSE") }));
     });
   });
+}
+
+// Stops a child without waiting forever when it has already exited.
+async function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill();
+  await exited;
+}
+
+// freePort() closes its probe listener before the child binds, so another
+// process can take the port in between. Retry a few times on EADDRINUSE.
+async function startHttpServer(env) {
+  for (let attempt = 1; ; attempt += 1) {
+    const port = await freePort();
+    const child = spawn(process.execPath, [path.join(root, "mcp", "server.js"), "--http"], {
+      cwd: root, env: { ...env, WPBRIDGE_MCP_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      await ready(child);
+      return { child, port };
+    } catch (error) {
+      await stop(child);
+      if (!error.addressInUse || attempt >= 3) throw error;
+    }
+  }
 }
 
 test("installed local plugin launcher connects to the stdio MCP server", async () => {
@@ -95,16 +122,12 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
   });
   await new Promise((resolve) => bridge.listen(0, "127.0.0.1", resolve));
   const sitesFile = registry(temp, bridge.address().port);
-  const port = await freePort();
-  const child = spawn(process.execPath, [path.join(root, "mcp", "server.js"), "--http"], {
-    cwd: root,
-    env: { ...process.env, WPBRIDGE_MCP_SITES_FILE: sitesFile, SITE_KEY: key,
-      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_PORT: String(port), WPBRIDGE_MCP_UPLOAD_DIR: temp },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
   const client = new Client({ name: "wpbridge-http-test", version: "1.0.0" });
+  let child = null;
   try {
-    await ready(child);
+    let port;
+    ({ child, port } = await startHttpServer({ ...process.env, WPBRIDGE_MCP_SITES_FILE: sitesFile, SITE_KEY: key,
+      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_UPLOAD_DIR: temp }));
     const url = `http://127.0.0.1:${port}/mcp`;
     const unauthorized = await fetch(url, { method: "POST", body: "{}" });
     assert.equal(unauthorized.status, 401);
@@ -127,8 +150,7 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
     assert.deepEqual(calls[0].body, { action: "listPosts" });
   } finally {
     await client.close();
-    child.kill();
-    await new Promise((resolve) => child.once("exit", resolve));
+    if (child) await stop(child);
     await new Promise((resolve) => bridge.close(resolve));
     fs.rmSync(temp, { recursive: true, force: true });
   }
