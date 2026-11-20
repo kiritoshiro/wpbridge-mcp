@@ -773,25 +773,51 @@ final class WPBridge_MEC_Helper {
 		return $data;
 	}
 
+	/** Number of wp_insert_post() calls currently on the call stack. */
+	private static function insert_depth() {
+		$depth = 0;
+		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS ) as $frame ) {
+			if ( 'wp_insert_post' === ( $frame['function'] ?? '' ) && empty( $frame['class'] ) ) $depth++;
+		}
+		return $depth;
+	}
+
 	/**
-	 * Runs MEC's save_event() with a wp_insert_post_data filter that applies
-	 * $overrides to this event's own insert only (the target ID on update, the
-	 * first new MEC event on create). The filter is removed again even if MEC throws.
+	 * Runs MEC's save_event() with a one-shot wp_insert_post_data filter that applies
+	 * $overrides to MEC's own insert of this event only. On create every new event
+	 * has ID 0, so another plugin inserting a mec-events post while the filter is
+	 * installed (for example from an earlier wp_insert_post_data callback) must not
+	 * receive them. The filter therefore applies only to an insert that
+	 * - is the outermost wp_insert_post() since MEC was called (an insert started
+	 *   from inside MEC's insert, by any hook, is one level deeper), and
+	 * - was called with exactly the title, content, type, status and ID MEC was
+	 *   given. These are compared on wp_insert_post()'s third filter argument, the
+	 *   array exactly as MEC passed it, before WordPress sanitizes or slashes it.
+	 * It runs at PHP_INT_MIN so no later-registered callback runs first. The save
+	 * is verified afterwards, so a missed or misdirected override cannot return
+	 * success. The filter is removed again even if MEC throws.
 	 */
 	private static function run_mec_save( $args, $event_id, $overrides, &$applied ) {
 		$applied = false;
-		$guard = function ( $data, $postarr ) use ( $event_id, $overrides, &$applied ) {
-			if ( $applied || ! is_array( $data ) || ! isset( $data['post_type'] ) || self::POST_TYPE !== $data['post_type'] ) return $data;
-			$target = ( is_array( $postarr ) && ! empty( $postarr['ID'] ) ) ? (int) $postarr['ID'] : 0;
+		if ( ! function_exists( 'debug_backtrace' ) ) return self::error( 'calendar_save_unavailable', 'This PHP configuration disables debug_backtrace(), which the helper needs to scope its save.', 500 );
+		$expected = array( 'post_title' => $args['title'], 'post_content' => $args['content'], 'post_type' => self::POST_TYPE, 'post_status' => $args['status'] );
+		$base_depth = self::insert_depth();
+		$guard = function ( $data, $postarr, $raw = null ) use ( $event_id, $overrides, $expected, $base_depth, &$applied ) {
+			if ( $applied || ! is_array( $data ) || ! isset( $data['post_type'] ) || self::POST_TYPE !== $data['post_type'] || ! is_array( $raw ) ) return $data;
+			$target = ! empty( $raw['ID'] ) ? (int) $raw['ID'] : 0;
 			if ( $target !== (int) $event_id ) return $data;
+			foreach ( $expected as $key => $value ) {
+				if ( ! array_key_exists( $key, $raw ) || $raw[ $key ] !== $value ) return $data;
+			}
+			if ( self::insert_depth() !== $base_depth + 1 ) return $data;
 			$applied = true;
 			return array_merge( $data, $overrides );
 		};
-		add_filter( 'wp_insert_post_data', $guard, 0, 2 );
+		add_filter( 'wp_insert_post_data', $guard, PHP_INT_MIN, 3 );
 		try {
 			return self::main()->save_event( $args, $event_id );
 		} finally {
-			remove_filter( 'wp_insert_post_data', $guard, 0 );
+			remove_filter( 'wp_insert_post_data', $guard, PHP_INT_MIN );
 		}
 	}
 
@@ -837,7 +863,12 @@ final class WPBridge_MEC_Helper {
 		if ( ! $applied ) $mismatch[] = 'core_fields';
 		if ( ! $saved || ( null !== $author_id && (int) $saved->post_author !== $author_id ) ) $mismatch[] = 'author_id';
 		if ( ! $saved || $target_status !== $saved->post_status ) $mismatch[] = 'status';
-		if ( isset( $overrides['post_password'] ) && ( ! $saved || $saved->post_password !== $existing->post_password ) ) $mismatch[] = 'post_password';
+		// Every overridden core field must be on this event as sent (the overrides are
+		// slashed for wp_insert_post(), which unslashes them before saving).
+		foreach ( $overrides as $field => $value ) {
+			if ( 'post_author' === $field || 'post_status' === $field ) continue;
+			if ( ! $saved || (string) $saved->$field !== (string) wp_unslash( $value ) ) $mismatch[] = $field;
+		}
 		if ( $mismatch ) {
 			return self::error( 'calendar_save_unverified', 'The event was saved, but WordPress did not keep these fields as requested: ' . implode( ', ', $mismatch ) . '. Check the event in WordPress before editing it again.', 500, array( 'event_id' => $id, 'fields' => $mismatch ) );
 		}

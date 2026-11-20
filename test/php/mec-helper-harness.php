@@ -95,8 +95,12 @@ function remove_filter( $hook, $callback, $priority = 10 ) {
 	}
 	return false;
 }
+/** Runs callbacks by priority, then in the order they were added, like WP_Hook. */
 function apply_filters( $hook, $value, ...$rest ) {
-	foreach ( $GLOBALS['t']['filters'][ $hook ] ?? array() as $f ) $value = call_user_func_array( $f[0], array_slice( array_merge( array( $value ), $rest ), 0, $f[2] ) );
+	$callbacks = $GLOBALS['t']['filters'][ $hook ] ?? array();
+	$keys = array_keys( $callbacks );
+	usort( $keys, function ( $a, $b ) use ( $callbacks ) { return array( $callbacks[ $a ][1], $a ) <=> array( $callbacks[ $b ][1], $b ); } );
+	foreach ( $keys as $k ) $value = call_user_func_array( $callbacks[ $k ][0], array_slice( array_merge( array( $value ), $rest ), 0, $callbacks[ $k ][2] ) );
 	return $value;
 }
 function is_wp_error( $v ) { return $v instanceof WP_Error; }
@@ -145,21 +149,32 @@ function wp_set_object_terms( $id, $terms, $taxonomy ) {
 	return $GLOBALS['t']['object_terms'][ $id ][ $taxonomy ];
 }
 
-/** The wp_insert_post() behaviour that matters here (defaults applied, not merged). */
+/**
+ * The wp_insert_post() behaviour that matters here (defaults applied, not merged).
+ * As in WordPress, the second filter argument is the sanitized array (here the
+ * content goes through kses' stripslashes/addslashes round trip, as MEC passes
+ * unslashed values) and the third is the array exactly as the caller passed it.
+ * wp_insert_post_empty_content runs first, so hooks can insert other posts
+ * before this insert reaches wp_insert_post_data.
+ */
 function wp_insert_post( $postarr ) {
+	$raw = $postarr;
 	$update = ! empty( $postarr['ID'] );
+	$postarr = array_merge( array( 'post_title' => '', 'post_content' => '', 'post_status' => 'draft', 'post_type' => 'post', 'post_author' => get_current_user_id() ), $postarr );
+	$postarr['post_content'] = addslashes( stripslashes( $postarr['post_content'] ) );
+	apply_filters( 'wp_insert_post_empty_content', false, $postarr );
 	$now = gmdate( 'Y-m-d H:i:s' );
-	$status = $postarr['post_status'] ?? 'draft';
+	$status = $postarr['post_status'];
 	if ( 'future' === $status ) $status = 'publish'; // no post_date passed, so it is not in the future
 	$draft = in_array( $status, array( 'draft', 'pending' ), true );
 	$data = array(
 		'post_author' => get_current_user_id(), 'post_date' => $now, 'post_date_gmt' => $draft ? '0000-00-00 00:00:00' : $now,
-		'post_content' => $postarr['post_content'] ?? '', 'post_title' => $postarr['post_title'] ?? '', 'post_excerpt' => '',
+		'post_content' => $postarr['post_content'], 'post_title' => $postarr['post_title'], 'post_excerpt' => '',
 		'post_status' => $status, 'post_type' => $postarr['post_type'], 'post_password' => '',
-		'post_name' => $draft ? '' : sanitize_title( $postarr['post_title'] ?? '' ), 'post_parent' => 0, 'menu_order' => 0,
+		'post_name' => $draft ? '' : sanitize_title( $postarr['post_title'] ), 'post_parent' => 0, 'menu_order' => 0,
 		'comment_status' => 'closed', 'ping_status' => 'closed', 'post_content_filtered' => '', 'post_mime_type' => '', 'to_ping' => '', 'pinged' => '',
 	);
-	$data = wp_unslash( apply_filters( 'wp_insert_post_data', wp_slash( $data ), $postarr, $postarr, $update ) );
+	$data = wp_unslash( apply_filters( 'wp_insert_post_data', $data, $postarr, $raw, $update ) );
 	$id = $update ? (int) $postarr['ID'] : $GLOBALS['t']['next_id']++;
 	if ( '' === $data['post_name'] && ! in_array( $data['post_status'], array( 'draft', 'pending' ), true ) ) $data['post_name'] = sanitize_title( $data['post_title'] );
 	t_post( $id, array_merge( $data, array( 'ID' => $id ) ) );
@@ -340,6 +355,71 @@ check( 'filter removed when MEC throws', $threw && 1 === count( $GLOBALS['t']['f
 $GLOBALS['t']['mec_throws'] = false;
 $other = wp_insert_post( array( 'ID' => 71, 'post_title' => 'Other', 'post_type' => 'mec-events', 'post_status' => 'draft' ) );
 check( 'other inserts are untouched afterwards', 7 === (int) $GLOBALS['t']['posts'][71]->post_author );
+
+// Values that WordPress slashes or sanitizes still match what MEC was given.
+t_reset();
+$result = create( array( 'title' => 'It\'s "on"', 'content' => '<p>Don\'t miss it</p>', 'excerpt' => 'Sam\'s pick', 'author_id' => 23 ) );
+$new = $GLOBALS['t']['posts'][500] ?? null;
+check( 'create with quotes applies author and excerpt', 200 === status_of( $result ) && $new && 23 === (int) $new->post_author && 'Sam\'s pick' === $new->post_excerpt && '<p>Don\'t miss it</p>' === $new->post_content, code_of( $result ) );
+
+/**
+ * Installs a wp_insert_post_data (or other) callback, added before the helper's
+ * guard and so run first at the same priority, that inserts one other mec-events
+ * post while the first insert it sees is in progress.
+ */
+function t_nested_insert( $hook, $postarr ) {
+	$GLOBALS['t']['nested_done'] = false;
+	add_filter( $hook, function ( $value ) use ( $postarr ) {
+		if ( ! $GLOBALS['t']['nested_done'] ) {
+			$GLOBALS['t']['nested_done'] = true;
+			$GLOBALS['t']['nested_id'] = wp_insert_post( $postarr );
+		}
+		return $value;
+	}, PHP_INT_MIN, 1 );
+}
+$nested_cases = array(
+	'different event from an earlier wp_insert_post_data callback' => array( 'wp_insert_post_data', array( 'post_title' => 'Companion', 'post_content' => '', 'post_type' => 'mec-events', 'post_status' => 'draft' ) ),
+	'identical event from an earlier wp_insert_post_data callback' => array( 'wp_insert_post_data', array( 'post_title' => 'Fresh', 'post_content' => '', 'post_type' => 'mec-events', 'post_status' => 'draft' ) ),
+	'identical event from a hook before wp_insert_post_data'       => array( 'wp_insert_post_empty_content', array( 'post_title' => 'Fresh', 'post_content' => '', 'post_type' => 'mec-events', 'post_status' => 'draft' ) ),
+);
+foreach ( $nested_cases as $label => $case ) {
+	t_reset();
+	t_nested_insert( $case[0], $case[1] );
+	$result = create( array( 'title' => 'Fresh', 'excerpt' => 'Short', 'author_id' => 23 ) );
+	$nested = $GLOBALS['t']['posts'][ $GLOBALS['t']['nested_id'] ?? 0 ] ?? null;
+	$intended = is_array( $result ) ? ( $GLOBALS['t']['posts'][ $result['event']['id'] ?? 0 ] ?? null ) : null;
+	check( "nested insert ($label) does not get the overrides", $nested && 7 === (int) $nested->post_author && '' === $nested->post_excerpt && 'draft' === $nested->post_status );
+	check( "intended event still gets them ($label)", 200 === status_of( $result ) && $intended && $intended !== $nested && 23 === (int) $intended->post_author && 'Short' === $intended->post_excerpt, code_of( $result ) );
+}
+
+t_reset();
+t_nested_insert( 'wp_insert_post_data', array( 'post_title' => 'Later', 'post_content' => '', 'post_type' => 'mec-events', 'post_status' => 'draft' ) );
+$when = gmdate( 'Y-m-d H:i:s', time() + 3600 );
+$result = create( array( 'title' => 'Later', 'status' => 'future', 'scheduled_for_gmt' => str_replace( ' ', 'T', $when ) . 'Z' ) );
+$nested = $GLOBALS['t']['posts'][ $GLOBALS['t']['nested_id'] ] ?? null;
+$intended = $GLOBALS['t']['posts'][501] ?? null;
+check( 'nested insert during a scheduled create is not scheduled', $nested && 'draft' === $nested->post_status && '0000-00-00 00:00:00' === $nested->post_date_gmt );
+check( 'the scheduled event is', 200 === status_of( $result ) && $intended && 'future' === $intended->post_status && $when === $intended->post_date_gmt, code_of( $result ) );
+
+// A nested update of the event being edited does not take its overrides either.
+t_reset();
+t_event( 72, array( 'post_author' => 23, 'post_excerpt' => 'Kept' ) );
+t_nested_insert( 'wp_insert_post_data', array( 'ID' => 72, 'post_title' => 'Event', 'post_content' => '', 'post_type' => 'mec-events', 'post_status' => 'draft' ) );
+$result = update( 72, array( 'title' => 'Event' ) );
+check( 'nested update of the same event does not consume the guard', 200 === status_of( $result ) && 23 === (int) $GLOBALS['t']['posts'][72]->post_author && 'Kept' === $GLOBALS['t']['posts'][72]->post_excerpt, code_of( $result ) );
+
+// Every overridden field is verified, so a lost override cannot return 200.
+t_reset();
+add_filter( 'wp_insert_post_data', function ( $data ) { $data['post_excerpt'] = ''; return $data; }, 10, 1 );
+$result = create( array( 'title' => 'Fresh', 'excerpt' => 'Short' ) );
+check( 'lost excerpt on create is reported, not 200', 500 === status_of( $result ) && 'calendar_save_unverified' === code_of( $result ) && in_array( 'post_excerpt', $result->data['fields'], true ), code_of( $result ) );
+
+t_reset();
+t_event( 73, array( 'post_status' => 'publish', 'menu_order' => 4, 'post_name' => 'kept-slug' ) );
+add_filter( 'wp_insert_post_data', function ( $data ) { $data['menu_order'] = 0; return $data; }, 10, 1 );
+$result = update( 73, array( 'title' => 'Event' ) );
+check( 'lost core field on update is reported, not 200', 500 === status_of( $result ) && array( 'menu_order' ) === $result->data['fields'], code_of( $result ) );
+check( 'insert filters removed after the nested-insert cases', 1 === count( $GLOBALS['t']['filters']['wp_insert_post_data'] ) );
 
 // ---------------------------------------------------------------- references are checked before the write
 

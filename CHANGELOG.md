@@ -21,7 +21,11 @@
   WordPress reset the author to the editing user and cleared the password, slug
   and date on every edit. A filter scoped to the event's own save now keeps the
   existing author (or applies a permitted `author_id`) and the other untouched
-  core fields, and the saved author, status and password are checked afterwards.
+  core fields. The filter applies only to MEC's own, outermost insert with the
+  exact title, content and status MEC was given, so another `mec-events` post
+  inserted from a hook during the save cannot take the author, excerpt or
+  schedule. The saved author, status, excerpt and every other overridden field
+  are checked afterwards, and a mismatch returns 500 instead of success.
   Scheduling writes `future` with its date in one save instead of publishing
   first. Term and media IDs are validated before the save so an invalid ID no
   longer leaves a partial write behind an error. A PHP regression harness

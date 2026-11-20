@@ -37,7 +37,7 @@ After copying the directory to `wp-content/plugins/wpbridge-mec-helper/`, activa
 ### 1.0.2
 
 - Security: recurrence values are validated strictly and rebuilt by the helper before MEC writes them into SQL. Earlier versions passed `weekdays`, `in_days` and `not_in_days` through as text, so a user who could edit an event could change other rows in MEC's events table.
-- MEC's save leaves out the author, password and other post fields, so WordPress used to reset them on every edit. Edits now keep the event's author (or apply a permitted `author_id`), password, slug, date, parent, menu order and comment settings, and the helper checks the saved author, status and password afterwards.
+- MEC's save leaves out the author, password and other post fields, so WordPress used to reset them on every edit. Edits now keep the event's author (or apply a permitted `author_id`), password, slug, date, parent, menu order and comment settings. These values go only to MEC's own insert of the event: another `mec-events` post inserted while it runs (for example by another plugin's hook) does not receive them. The helper then checks the saved author, status, excerpt and every other field it set, and returns 500 if any was not kept.
 - Scheduling saves the event once, straight to `future` with its date. Earlier versions published it first, which ran publication hooks.
 - Creating needs `create_posts`. Reading one event needs `read_post` instead of `edit_post`, and hidden events return 404.
 - Unknown term and media IDs are rejected before the save, not after a partial write.
