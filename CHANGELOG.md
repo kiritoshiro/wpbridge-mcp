@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Security: harden the MEC calendar helper (1.0.1) authorization using the
+  `mec-events` post type and MEC taxonomy capability objects. Listings only
+  return events the user may read (others' drafts/pending/future need
+  `edit_others_posts`, private needs `read_private_posts`); publish/future/private
+  writes need `publish_posts`; `author_id` for another user needs
+  `edit_others_posts`; term creation needs `manage_terms` and term assignment
+  `assign_terms`. Disallowed writes return 403 instead of being downgraded, and
+  updates without `author_id` keep the existing author. Version 1.0.0 let a
+  Contributor read other authors' drafts and publish events as another user.
 - Security: parse `Authorization: Bearer` headers with a linear-time pattern in
   one shared helper. The old pattern took seconds on long whitespace-padded
   headers before authentication (CodeQL `js/polynomial-redos`). Upstream error
