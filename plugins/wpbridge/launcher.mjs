@@ -18,6 +18,6 @@ try {
   await main(["--stdio"]);
 } catch (error) {
   console.error(error.message);
-  console.error("Run npm run mcp:configure-local in your WPBridge checkout, then open a new Codex task.");
+  console.error("Run npm run mcp:configure-local in your WPBridge checkout, then start a new Codex task or Claude Code session.");
   process.exitCode = 1;
 }

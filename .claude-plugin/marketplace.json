@@ -1,0 +1,15 @@
+{
+  "name": "wpbridge-mcp",
+  "description": "WPBridge plugins for Claude Code.",
+  "owner": {
+    "name": "WPBridge"
+  },
+  "plugins": [
+    {
+      "name": "wpbridge",
+      "source": "./plugins/wpbridge",
+      "description": "Manage explicitly connected WordPress sites through guarded WPBridge MCP tools.",
+      "category": "productivity"
+    }
+  ]
+}

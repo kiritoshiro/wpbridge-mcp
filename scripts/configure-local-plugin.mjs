@@ -14,4 +14,4 @@ const configPath = process.env.WPBRIDGE_MCP_LOCAL_CONFIG ||
 fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
 fs.writeFileSync(configPath, JSON.stringify({ repo_root: root }) + "\n", { mode: 0o600 });
 console.log(`Configured the local WPBridge plugin at ${configPath}.`);
-console.log("Install or reinstall the plugin from its marketplace, then open a new Codex task.");
+console.log("Install or reinstall the plugin from its marketplace, then start a new Codex task or Claude Code session.");

@@ -1,6 +1,6 @@
 # WPBridge MCP setup
 
-This repository has three cooperating parts: the per-site WPBridge service, the multi-site MCP gateway in `mcp/`, and the Codex plugin in `plugins/wpbridge/`. The optional `wordpress/wpbridge-control/` companion adds a limited set of site-maintenance actions. Enrolling a site is explicit: a site does not become available just because the plugin is installed. The older Custom GPT bridge can keep running while you test this repository separately.
+This repository has three cooperating parts: the per-site WPBridge service, the multi-site MCP gateway in `mcp/`, and the plugin in `plugins/wpbridge/`, which installs in both Codex and Claude Code. The optional `wordpress/wpbridge-control/` companion adds a limited set of site-maintenance actions. Enrolling a site is explicit: a site does not become available just because the plugin is installed. The older Custom GPT bridge can keep running while you test this repository separately.
 
 ## 1. Prepare one site
 
@@ -27,6 +27,23 @@ codex plugin add wpbridge@personal
 
 `mcp:configure-local` writes **only the absolute checkout path**, not credentials, to `~/.wpbridge-mcp/local.json` (on Windows, under your user profile). The installed plugin reads this stable per-user file, so it works after Codex copies the plugin into its cache. If you move the checkout, run the configuration command again. A new Codex task loads the installed plugin. If this marketplace was already added, skip `marketplace add`; after changing plugin code, reinstall the plugin and start a new task. This repository marketplace is named `personal`; check the name in `.agents/plugins/marketplace.json` before installing.
 
+### Claude Code
+
+The same plugin directory and skill install in Claude Code. Its `.claude-plugin/plugin.json` defines the MCP server with `${CLAUDE_PLUGIN_ROOT}/launcher.mjs`, because Claude Code documents `${CLAUDE_PLUGIN_ROOT}` for plugin server paths but not a plugin-relative `cwd`. That inline server replaces the same-named entry in the Codex `.mcp.json`, which keeps its relative launcher and `cwd`. Both read the same per-user checkout file. From this checkout, run:
+
+```powershell
+npm ci
+npm run mcp:configure-local
+claude plugin marketplace add .
+claude plugin install wpbridge@wpbridge-mcp
+```
+
+Inside a session, `/plugin marketplace add <path to this checkout>` and `/plugin install wpbridge@wpbridge-mcp` do the same. A marketplace added from a local path loads the plugin in place, so `/reload-plugins` or a new session picks up edits. Enroll sites as in section 2, then start a new session, check `/mcp` for `plugin:wpbridge:wpbridge`, and call `list_sites`. If the server fails to start, run `node plugins/wpbridge/launcher.mjs` in a terminal to see the launcher's message. Check a plugin edit with `claude plugin validate plugins/wpbridge` and `claude plugin validate .`.
+
+### Local media uploads (stdio only)
+
+Codex and Claude Code cannot pass ChatGPT file URLs, so stdio sessions do not offer `upload_attached_media`. To upload a local image, audio file, or PDF, set `WPBRIDGE_MCP_UPLOAD_DIR` in `mcp/.env` to an absolute local folder that holds only files you intend to upload. The stdio server then offers `upload_local_media`, which takes a path inside that folder and an idempotency key and sends the bytes through the existing `uploadMedia` action, so the site needs the `editorial` permission and, if it uses `allowed_actions`, `uploadMedia`. The gateway refuses paths outside the folder, including `..`, symlink and junction escapes, UNC and device paths, and files over 30 MB, before it reads them; the bridge still checks type, signature, and its own `MAX_MEDIA_BYTES`. The tool is never offered over HTTP.
+
 To test the gateway without installing the Codex plugin, run `npm run mcp` for stdio. For a local HTTP MCP client, set a random 32-character-or-longer `WPBRIDGE_MCP_TOKEN` in `mcp/.env`, then run `npm run mcp:http`; it listens only on `http://127.0.0.1:8790/mcp` by default. The local token is not a ChatGPT OAuth substitute.
 
 In the client, call `list_sites`, then try `wpbridge_contentRead` with a returned `site_id` and `action: listPosts`. Check that an action absent from `allowed_actions` is refused. Before enabling writes, test a draft and its preview/version checks on one site at a time. Installing the plugin by itself does not start the per-site bridge processes.
@@ -51,4 +68,4 @@ When OAuth is configured, MCP checks the token signature, issuer, audience, expi
 
 Set `PUBLIC_BASE_URL` to an HTTPS bridge origin and run `npm run ci`. Also run `php -l wordpress/wpbridge-control/wpbridge-control.php` and validate the plugin with `python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge`. The automated suite exercises the installed-style stdio launcher, authenticated HTTP transport, gateway routing, and signed OAuth token checks. It does not prove a live WordPress or ChatGPT connection; test each enrolled site separately, including cross-site key isolation and stale preview/version rejection.
 
-`upload_attached_media` adapts ChatGPT file inputs to WPBridge's attachment uploader. `downloadMedia` currently returns a file-response URL as JSON; verify it in your MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.
+Over HTTP, `upload_attached_media` adapts ChatGPT file inputs to WPBridge's attachment uploader; stdio clients use `upload_local_media` instead. `downloadMedia` currently returns a file-response URL as JSON; verify it in your MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.

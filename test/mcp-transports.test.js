@@ -99,7 +99,7 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
   const child = spawn(process.execPath, [path.join(root, "mcp", "server.js"), "--http"], {
     cwd: root,
     env: { ...process.env, WPBRIDGE_MCP_SITES_FILE: sitesFile, SITE_KEY: key,
-      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_PORT: String(port) },
+      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_PORT: String(port), WPBRIDGE_MCP_UPLOAD_DIR: temp },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const client = new Client({ name: "wpbridge-http-test", version: "1.0.0" });
@@ -114,6 +114,9 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
     await client.connect(transport);
     const sites = await client.callTool({ name: "list_sites", arguments: {} });
     assert.deepEqual(JSON.parse(sites.content[0].text), [{ id: "alpha", permissions: ["read"] }]);
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    assert.ok(!names.includes("upload_local_media"), "local file uploads are never offered over HTTP");
+    assert.ok(names.includes("upload_attached_media"));
     const posts = await client.callTool({
       name: "wpbridge_contentRead", arguments: { site_id: "alpha", action: "listPosts" },
     });
