@@ -158,10 +158,11 @@ export function sanitizeLogValue(value) {
 // counted instead of repeated; the next line emitted for that identity reports
 // the count as `repeated`. The identity never includes attacker-chosen values
 // such as Host, Origin or token hints. On top of that, at most
-// maxLinesPerWindow lines are written per window; the rest are dropped and
-// counted. There is no timer: the log_suppressed line with that count is
-// written when the next event arrives after the window has rolled over, so it
-// never appears if logging stops.
+// maxLinesPerWindow event lines are written per window; the rest are dropped
+// and counted. The log_suppressed line with that count is one extra line, not
+// part of the budget, so a window can hold maxLinesPerWindow + 1 lines. There
+// is no timer: it is written when the next event arrives after the window has
+// rolled over, so it never appears if logging stops.
 export function createSecurityLog({
   write = (line) => process.stderr.write(`${line}\n`), now = Date.now, windowMs = 60_000, maxKeys = 1000, maxLinesPerWindow = 100,
 } = {}) {

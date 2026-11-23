@@ -52,9 +52,10 @@
   `sub` are never logged; the hints and any rejected Host or Origin are
   attacker-controlled, so they are clipped and control characters and Unicode
   line separators are escaped. Lines are deduplicated by event, reason, client
-  and status, and capped at 100 per minute overall; the count of lines dropped
-  by the cap is written as one `log_suppressed` line when the next event
-  arrives after the minute rolls over (not on a timer).
+  and status, and capped at 100 event lines per minute overall; the count of
+  lines dropped by the cap is written as one extra `log_suppressed` line (so
+  up to 101 lines a minute) when the next event arrives after the minute rolls
+  over (not on a timer).
 - The `upload_attached_media` description now says it works only with ChatGPT
   file attachments.
 
