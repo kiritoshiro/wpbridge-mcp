@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Security: harden the MEC calendar helper (1.0.2) authorization using the
+  `mec-events` post type and MEC taxonomy capability objects. Listings only
+  return events the user may read (others' drafts/pending/future need
+  `edit_others_posts`, private needs `read_private_posts`); reading one event
+  needs `read_post` and returns the same 404 for hidden and missing events;
+  creating needs `create_posts`; publish/future/private writes need
+  `publish_posts`; `author_id` for another user needs `edit_others_posts`; term
+  creation needs `manage_terms` and term assignment `assign_terms`. Disallowed
+  writes return 403 instead of being downgraded. Version 1.0.0 let a
+  Contributor read other authors' drafts and publish events as another user.
+- Security: the MEC helper (1.0.2) validates recurrence `weekdays`, `in_days`,
+  `not_in_days` and `advanced_days` against strict weekday, date and token
+  formats and rebuilds them itself before MEC concatenates them into SQL. Earlier
+  versions passed them through as text, so a user who could edit one event could
+  change other rows in MEC's events table.
+- MEC helper (1.0.2): MEC's save passes only title, content and status, so
+  WordPress reset the author to the editing user and cleared the password, slug
+  and date on every edit. A filter scoped to the event's own save now keeps the
+  existing author (or applies a permitted `author_id`) and the other untouched
+  core fields. The filter applies only to MEC's own, outermost insert with the
+  exact title, content and status MEC was given, so another `mec-events` post
+  inserted from a hook during the save cannot take the author, excerpt or
+  schedule. The saved author, status, excerpt and every other overridden field
+  are checked afterwards, and a mismatch returns 500 instead of success.
+  Scheduling writes `future` with its date in one save instead of publishing
+  first. Term and media IDs are validated before the save so an invalid ID no
+  longer leaves a partial write behind an error. A PHP regression harness
+  (`test/php/`, run by `npm test` when PHP is installed) covers these cases.
 - Security: parse `Authorization: Bearer` headers with a linear-time pattern in
   one shared helper. The old pattern took seconds on long whitespace-padded
   headers before authentication (CodeQL `js/polynomial-redos`). Upstream error

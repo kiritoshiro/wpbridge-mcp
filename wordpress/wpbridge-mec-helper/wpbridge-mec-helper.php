@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WPBridge MEC Calendar Helper
  * Description: Exposes fixed, optimistic-lock protected Modern Events Calendar editorial fields to WPBridge.
- * Version: 1.0.0
+ * Version: 1.0.2
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * Author: site-one.example
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class WPBridge_MEC_Helper {
 	const REST_NAMESPACE = 'wpbridge/v1';
-	const VERSION = '1.0.0';
+	const VERSION = '1.0.2';
 	const POST_TYPE = 'mec-events';
 
 	private static $taxonomies = array(
@@ -35,6 +35,7 @@ final class WPBridge_MEC_Helper {
 
 	public static function init() {
 		add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
+		add_filter( 'posts_where', array( __CLASS__, 'restrict_list_visibility' ), 10, 2 );
 	}
 
 	public static function register_routes() {
@@ -63,7 +64,7 @@ final class WPBridge_MEC_Helper {
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( __CLASS__, 'create_event' ),
-				'permission_callback' => array( __CLASS__, 'can_manage' ),
+				'permission_callback' => array( __CLASS__, 'can_create_event' ),
 			)
 		);
 
@@ -74,7 +75,7 @@ final class WPBridge_MEC_Helper {
 				array(
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( __CLASS__, 'get_event' ),
-					'permission_callback' => array( __CLASS__, 'can_edit_event' ),
+					'permission_callback' => array( __CLASS__, 'can_read_event' ),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -96,7 +97,7 @@ final class WPBridge_MEC_Helper {
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( __CLASS__, 'create_term' ),
-					'permission_callback' => array( __CLASS__, 'can_manage' ),
+					'permission_callback' => array( __CLASS__, 'can_create_term' ),
 				),
 			)
 		);
@@ -106,17 +107,72 @@ final class WPBridge_MEC_Helper {
 		if ( ! self::available() ) {
 			return self::error( 'mec_not_available', 'Modern Events Calendar is not active.', 503 );
 		}
-		return current_user_can( 'edit_posts' );
+		return current_user_can( self::post_type_cap( 'edit_posts' ) );
+	}
+
+	public static function can_create_term( WP_REST_Request $request ) {
+		$allowed = self::can_manage();
+		if ( true !== $allowed ) return $allowed;
+		$taxonomy = self::taxonomy_from_slug( $request['taxonomy'] );
+		$object = $taxonomy ? get_taxonomy( $taxonomy ) : false;
+		if ( ! $object ) return self::error( 'calendar_taxonomy_not_found', 'The requested MEC taxonomy is not available.', 404 );
+		if ( ! current_user_can( $object->cap->manage_terms ) ) return self::error( 'calendar_cannot_create_term', 'Sorry, you are not allowed to create terms in this calendar taxonomy.', 403 );
+		return true;
+	}
+
+	/**
+	 * Resolves a primitive capability from the MEC post type's capability object,
+	 * failing closed when the post type is not registered.
+	 */
+	private static function post_type_cap( $cap ) {
+		$object = get_post_type_object( self::POST_TYPE );
+		return ( $object && isset( $object->cap->$cap ) ) ? $object->cap->$cap : 'do_not_allow';
+	}
+
+	/**
+	 * Creating an event needs the post type's create_posts capability, as in
+	 * WP_REST_Posts_Controller::create_item_permissions_check().
+	 */
+	public static function can_create_event() {
+		if ( ! self::available() ) {
+			return self::error( 'mec_not_available', 'Modern Events Calendar is not active.', 503 );
+		}
+		return current_user_can( self::post_type_cap( 'create_posts' ) );
+	}
+
+	/**
+	 * Returns the event only when it exists, is an MEC event and the current user
+	 * may read it. Callers answer every other case with the same 404, so the
+	 * response does not reveal which unpublished events exist.
+	 */
+	private static function readable_event( WP_REST_Request $request ) {
+		$post = get_post( (int) $request['id'] );
+		if ( ! $post || self::POST_TYPE !== $post->post_type || ! current_user_can( 'read_post', $post->ID ) ) {
+			return null;
+		}
+		return $post;
+	}
+
+	private static function event_not_found() {
+		return self::error( 'mec_event_not_found', 'The requested calendar event does not exist.', 404 );
+	}
+
+	/**
+	 * Reading one event needs the same editorial access as listing events, plus
+	 * read_post on that event (so it matches what the list shows).
+	 */
+	public static function can_read_event( WP_REST_Request $request ) {
+		$allowed = self::can_manage();
+		if ( true !== $allowed ) return $allowed;
+		return self::readable_event( $request ) ? true : self::event_not_found();
 	}
 
 	public static function can_edit_event( WP_REST_Request $request ) {
 		if ( ! self::available() ) {
 			return self::error( 'mec_not_available', 'Modern Events Calendar is not active.', 503 );
 		}
-		$post = get_post( (int) $request['id'] );
-		if ( ! $post || self::POST_TYPE !== $post->post_type ) {
-			return self::error( 'mec_event_not_found', 'The requested calendar event does not exist.', 404 );
-		}
+		$post = self::readable_event( $request );
+		if ( ! $post ) return self::event_not_found();
 		return current_user_can( 'edit_post', $post->ID );
 	}
 
@@ -224,6 +280,97 @@ final class WPBridge_MEC_Helper {
 		return array_values( array_unique( $out ) );
 	}
 
+	/**
+	 * Splits a recurrence list into trimmed, non-empty string items. It takes an
+	 * array or MEC's own separated-string form (the shape read back from post
+	 * meta), and rejects every other type. Each caller then checks every item
+	 * against a strict pattern: MEC's save_event() puts weekdays, custom days
+	 * and excluded days into its SQL without escaping.
+	 */
+	private static function recurrence_items( $value, $field, $max, $separator ) {
+		if ( null === $value || false === $value || '' === $value ) return array();
+		if ( is_string( $value ) ) {
+			if ( strlen( $value ) > $max * 40 ) return self::error( 'invalid_calendar_repeat', $field . ' is too long.', 400 );
+			$value = explode( $separator, $value );
+		}
+		if ( ! is_array( $value ) ) return self::error( 'invalid_calendar_repeat', $field . ' must be an array.', 400 );
+		if ( count( $value ) > $max * 2 ) return self::error( 'invalid_calendar_repeat', $field . ' may contain at most ' . $max . ' items.', 400 );
+		$items = array();
+		foreach ( $value as $item ) {
+			if ( is_int( $item ) ) $item = (string) $item;
+			if ( ! is_string( $item ) ) return self::error( 'invalid_calendar_repeat', $field . ' contains an invalid item.', 400 );
+			$item = trim( $item );
+			if ( '' !== $item ) $items[] = $item;
+		}
+		$items = array_values( array_unique( $items ) );
+		if ( count( $items ) > $max ) return self::error( 'invalid_calendar_repeat', $field . ' may contain at most ' . $max . ' items.', 400 );
+		return $items;
+	}
+
+	private static function is_iso_date( $value ) {
+		return (bool) preg_match( '/^(\d{4})-(\d{2})-(\d{2})\z/', $value, $m ) && checkdate( (int) $m[2], (int) $m[3], (int) $m[1] );
+	}
+
+	/** Weekday numbers as MEC stores them: 1 (Monday) to 7 (Sunday). */
+	private static function repeat_weekdays( $value ) {
+		$items = self::recurrence_items( $value, 'repeat.weekdays', 7, ',' );
+		if ( is_wp_error( $items ) ) return $items;
+		$out = array();
+		foreach ( $items as $item ) {
+			if ( ! preg_match( '/^[1-7]\z/', $item ) ) return self::error( 'invalid_calendar_repeat', 'repeat.weekdays must contain weekday numbers from 1 (Monday) to 7 (Sunday).', 400 );
+			$out[] = (int) $item;
+		}
+		$out = array_values( array_unique( $out ) );
+		sort( $out );
+		return $out;
+	}
+
+	/** Excluded dates, each YYYY-MM-DD. */
+	private static function repeat_dates( $value, $field ) {
+		$items = self::recurrence_items( $value, $field, 366, ',' );
+		if ( is_wp_error( $items ) ) return $items;
+		foreach ( $items as $item ) {
+			if ( ! self::is_iso_date( $item ) ) return self::error( 'invalid_calendar_repeat', $field . ' must contain YYYY-MM-DD dates.', 400 );
+		}
+		sort( $items );
+		return $items;
+	}
+
+	/**
+	 * Custom days in MEC's format: START:END with YYYY-MM-DD dates, optionally
+	 * followed by :HH-MM-AM:HH-MM-PM start and end times.
+	 */
+	private static function repeat_custom_days( $value ) {
+		$items = self::recurrence_items( $value, 'repeat.in_days', 366, ',' );
+		if ( is_wp_error( $items ) ) return $items;
+		$out = array();
+		foreach ( $items as $item ) {
+			$valid = preg_match( '/^(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})(?::(\d{1,2})-(\d{2})-(AM|PM):(\d{1,2})-(\d{2})-(AM|PM))?\z/i', $item, $m )
+				&& self::is_iso_date( $m[1] ) && self::is_iso_date( $m[2] ) && $m[2] >= $m[1];
+			if ( $valid && isset( $m[3] ) ) {
+				foreach ( array( 3, 6 ) as $i ) {
+					if ( (int) $m[ $i ] < 1 || (int) $m[ $i ] > 12 || (int) $m[ $i + 1 ] > 59 ) $valid = false;
+				}
+			}
+			if ( ! $valid ) return self::error( 'invalid_calendar_repeat', 'repeat.in_days must contain START:END date pairs (YYYY-MM-DD), optionally followed by :HH-MM-AM:HH-MM-PM times.', 400 );
+			$out[] = isset( $m[3] )
+				? sprintf( '%s:%s:%02d-%02d-%s:%02d-%02d-%s', $m[1], $m[2], (int) $m[3], (int) $m[4], strtoupper( $m[5] ), (int) $m[6], (int) $m[7], strtoupper( $m[8] ) )
+				: $m[1] . ':' . $m[2];
+		}
+		sort( $out );
+		return array_values( array_unique( $out ) );
+	}
+
+	/** Advanced-repeat tokens as MEC stores them, such as Mon.1 (first Monday) or Fri.l (last Friday). */
+	private static function repeat_advanced_days( $value ) {
+		$items = self::recurrence_items( $value, 'repeat.advanced_days', 35, '-' );
+		if ( is_wp_error( $items ) ) return $items;
+		foreach ( $items as $item ) {
+			if ( ! preg_match( '/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\.([1-4]|l)\z/', $item ) ) return self::error( 'invalid_calendar_repeat', 'repeat.advanced_days must contain tokens such as Mon.1 (first Monday) or Fri.l (last Friday).', 400 );
+		}
+		return $items;
+	}
+
 	private static function event_data( $post_id ) {
 		$post = get_post( (int) $post_id );
 		if ( ! $post || self::POST_TYPE !== $post->post_type ) return null;
@@ -316,9 +463,19 @@ final class WPBridge_MEC_Helper {
 		$status = self::clean_text( $request->get_param( 'status' ) ?: 'publish', 20 );
 		$allowed = array( 'publish', 'draft', 'pending', 'future', 'private', 'all' );
 		if ( ! in_array( $status, $allowed, true ) ) return self::error( 'invalid_calendar_status', 'Unsupported calendar status.', 400 );
+		$statuses = 'all' === $status ? array( 'publish', 'draft', 'pending', 'future', 'private' ) : array( $status );
+		// Statuses the user may see for any author; the rest are limited to the user's own events.
+		$any_author = array( 'publish' );
+		if ( current_user_can( self::post_type_cap( 'read_private_posts' ) ) ) $any_author[] = 'private';
+		if ( current_user_can( self::post_type_cap( 'edit_others_posts' ) ) ) array_push( $any_author, 'draft', 'pending', 'future' );
 		$args = array(
 			'post_type'      => self::POST_TYPE,
-			'post_status'    => 'all' === $status ? array( 'publish', 'draft', 'pending', 'future', 'private' ) : $status,
+			'post_status'    => $statuses,
+			'wpbridge_mec_visibility' => array(
+				'any_author' => array_values( array_intersect( $statuses, $any_author ) ),
+				'own'        => array_values( array_diff( $statuses, $any_author ) ),
+				'user'       => get_current_user_id(),
+			),
 			'posts_per_page' => $per_page,
 			'paged'          => $page,
 			'orderby'        => in_array( $request->get_param( 'orderby' ), array( 'date', 'modified', 'title', 'ID' ), true ) ? $request->get_param( 'orderby' ) : 'modified',
@@ -345,6 +502,7 @@ final class WPBridge_MEC_Helper {
 		$query = new WP_Query( $args );
 		$items = array();
 		foreach ( $query->posts as $post ) {
+			if ( ! current_user_can( 'read_post', $post->ID ) ) continue;
 			$data = self::event_data( $post->ID );
 			if ( $data ) $items[] = self::response( $data );
 		}
@@ -356,6 +514,21 @@ final class WPBridge_MEC_Helper {
 			'total' => (int) $query->found_posts,
 			'total_pages' => (int) $query->max_num_pages,
 		) );
+	}
+
+	/**
+	 * Applies the per-author status visibility built by list_events() to its WP_Query only.
+	 */
+	public static function restrict_list_visibility( $where, $query ) {
+		$rule = $query instanceof WP_Query ? $query->get( 'wpbridge_mec_visibility' ) : null;
+		if ( ! is_array( $rule ) || empty( $rule['own'] ) ) return $where;
+		global $wpdb;
+		$in = function ( $statuses ) {
+			return "'" . implode( "','", array_map( 'esc_sql', $statuses ) ) . "'";
+		};
+		$own = $wpdb->prepare( "{$wpdb->posts}.post_author = %d", (int) $rule['user'] ) . " AND {$wpdb->posts}.post_status IN (" . $in( $rule['own'] ) . ')';
+		$any = empty( $rule['any_author'] ) ? '' : "{$wpdb->posts}.post_status IN (" . $in( $rule['any_author'] ) . ') OR ';
+		return $where . " AND ( {$any}( {$own} ) )";
 	}
 
 	public static function get_event( WP_REST_Request $request ) {
@@ -404,6 +577,18 @@ final class WPBridge_MEC_Helper {
 			$repeat_count = (int) ( $repeat['occurrences'] ?? 0 );
 			if ( $repeat_count < 1 || $repeat_count > 10000 ) return self::error( 'invalid_calendar_repeat', 'repeat.occurrences must be between 1 and 10000.', 400 );
 		}
+		// Validated before any write and serialized here: MEC's save_event() concatenates
+		// weekdays, days and not_in_days into SQL without escaping.
+		$weekdays = self::repeat_weekdays( $repeat['weekdays'] ?? null );
+		if ( is_wp_error( $weekdays ) ) return $weekdays;
+		$advanced_days = self::repeat_advanced_days( $repeat['advanced_days'] ?? null );
+		if ( is_wp_error( $advanced_days ) ) return $advanced_days;
+		$in_days = self::repeat_custom_days( $repeat['in_days'] ?? null );
+		if ( is_wp_error( $in_days ) ) return $in_days;
+		$not_in_days = self::repeat_dates( $repeat['not_in_days'] ?? null, 'repeat.not_in_days' );
+		if ( is_wp_error( $not_in_days ) ) return $not_in_days;
+		$in_days = implode( ',', $in_days );
+		$not_in_days = implode( ',', $not_in_days );
 		$ids = array();
 		foreach ( array( 'category_ids', 'location_ids', 'organizer_ids', 'label_ids', 'tag_ids', 'speaker_ids', 'sponsor_ids', 'additional_location_ids', 'additional_organizer_ids', 'gallery_media_ids' ) as $key ) {
 			if ( array_key_exists( $key, $params ) ) {
@@ -424,9 +609,10 @@ final class WPBridge_MEC_Helper {
 			'mec_additional_organizer_ids' => $ids['additional_organizer_ids'],
 			'mec_comment' => array_key_exists( 'time_comment', $params ) ? self::clean_text( $params['time_comment'], 500 ) : ( $old['time_comment'] ?? '' ),
 			'mec_timezone' => array_key_exists( 'timezone', $params ) ? self::clean_text( $params['timezone'], 100 ) : ( $old['timezone'] ?? 'global' ),
-			'mec_advanced_days' => is_scalar( $repeat['advanced_days'] ?? '' ) ? (string) ( $repeat['advanced_days'] ?? '' ) : '',
-			'mec_in_days' => is_scalar( $repeat['in_days'] ?? '' ) ? (string) ( $repeat['in_days'] ?? '' ) : '',
-			'mec_not_in_days' => is_scalar( $repeat['not_in_days'] ?? '' ) ? (string) ( $repeat['not_in_days'] ?? '' ) : '',
+			'mec_certain_weekdays' => $weekdays,
+			'mec_advanced_days' => $advanced_days,
+			'mec_in_days' => $in_days,
+			'mec_not_in_days' => $not_in_days,
 			'mec_more_info' => array_key_exists( 'more_info', $params ) ? esc_url_raw( (string) $params['more_info'] ) : ( $old['more_info'] ?? '' ),
 			'mec_more_info_title' => array_key_exists( 'more_info_title', $params ) ? self::clean_text( $params['more_info_title'], 300 ) : ( $old['more_info_title'] ?? '' ),
 			'mec_more_info_target' => array_key_exists( 'more_info_target', $params ) ? self::clean_text( $params['more_info_target'], 20 ) : ( $old['more_info_target'] ?? '_self' ),
@@ -436,7 +622,6 @@ final class WPBridge_MEC_Helper {
 		);
 		$args = array(
 			'title' => $title, 'content' => $content, 'status' => $status,
-			'author' => array_key_exists( 'author_id', $params ) ? (int) $params['author_id'] : null,
 			'location_id' => $location_id ?: 1, 'organizer_id' => $organizer_id ?: 1,
 			'start' => $start_date, 'end' => $end_date,
 			'start_time_hour' => $start_time[0], 'start_time_minutes' => $start_time[1], 'start_time_ampm' => $start_time[2],
@@ -445,10 +630,11 @@ final class WPBridge_MEC_Helper {
 			'time_comment' => array_key_exists( 'time_comment', $params ) ? self::clean_text( $params['time_comment'], 500 ) : ( $old['time_comment'] ?? '' ),
 			'repeat_status' => $repeat_enabled ? 1 : 0, 'repeat_type' => $repeat_enabled ? $repeat_type : '', 'interval' => $interval,
 			'finish' => $finish, 'repeat_count' => $repeat_count,
-			'weekdays' => is_array( $repeat['weekdays'] ?? null ) ? implode( ',', array_map( 'intval', $repeat['weekdays'] ) ) : (string) ( $repeat['weekdays'] ?? '' ),
-			'advanced_days' => is_scalar( $repeat['advanced_days'] ?? '' ) ? (string) ( $repeat['advanced_days'] ?? '' ) : '',
-			'in_days' => is_scalar( $repeat['in_days'] ?? '' ) ? (string) ( $repeat['in_days'] ?? '' ) : '',
-			'not_in_days' => is_scalar( $repeat['not_in_days'] ?? '' ) ? (string) ( $repeat['not_in_days'] ?? '' ) : '',
+			// MEC's own column format: ,1,3, (or NULL when no weekdays are set).
+			'weekdays' => $weekdays ? ',' . implode( ',', $weekdays ) . ',' : null,
+			'advanced_days' => implode( '-', $advanced_days ),
+			'in_days' => $in_days, 'days' => $in_days,
+			'not_in_days' => $not_in_days,
 			'meta' => $meta,
 		);
 		$args['date'] = array(
@@ -473,8 +659,172 @@ final class WPBridge_MEC_Helper {
 		return true;
 	}
 
+	/**
+	 * Mirrors WP_REST_Posts_Controller: publishing, scheduling and private status need
+	 * publish_posts, writing as another author needs edit_others_posts, and term
+	 * assignment needs each taxonomy's assign_terms. Disallowed requests are rejected
+	 * with 403 rather than silently downgraded.
+	 */
+	private static function check_write_permissions( $params, $payload, $scheduled_timestamp, $creating ) {
+		$target_status = $scheduled_timestamp ? 'future' : $payload['status'];
+		$status_requested = $creating || array_key_exists( 'status', $params ) || $scheduled_timestamp;
+		if ( $status_requested && in_array( $target_status, array( 'publish', 'future', 'private' ), true ) && ! current_user_can( self::post_type_cap( 'publish_posts' ) ) ) {
+			return self::error( 'calendar_cannot_publish', 'Sorry, you are not allowed to publish, schedule or privately publish calendar events.', 403 );
+		}
+		if ( array_key_exists( 'author_id', $params ) ) {
+			$author_id = (int) $params['author_id'];
+			if ( $author_id < 1 || ! get_userdata( $author_id ) ) return self::error( 'invalid_calendar_author', 'author_id must reference an existing user.', 400 );
+			if ( $author_id !== get_current_user_id() && ! current_user_can( self::post_type_cap( 'edit_others_posts' ) ) ) {
+				return self::error( 'calendar_cannot_edit_others', 'Sorry, you are not allowed to create or edit calendar events as another user.', 403 );
+			}
+		}
+		$taxonomy_params = array(
+			'category_ids' => 'mec_category', 'location_id' => 'mec_location', 'location_ids' => 'mec_location', 'additional_location_ids' => 'mec_location',
+			'organizer_id' => 'mec_organizer', 'organizer_ids' => 'mec_organizer', 'additional_organizer_ids' => 'mec_organizer',
+			'label_ids' => 'mec_label', 'tag_ids' => 'mec_tag', 'speaker_ids' => 'mec_speaker', 'sponsor_ids' => 'mec_sponsor',
+		);
+		foreach ( $taxonomy_params as $key => $taxonomy ) {
+			if ( ! array_key_exists( $key, $params ) ) continue;
+			$object = get_taxonomy( $taxonomy );
+			if ( $object && ! current_user_can( $object->cap->assign_terms ) ) {
+				return self::error( 'calendar_cannot_assign_terms', 'Sorry, you are not allowed to assign terms in ' . $taxonomy . '.', 403 );
+			}
+		}
+		return true;
+	}
+
+	/** Attachment the current user may read and that WordPress treats as an image. */
+	private static function is_readable_image( $id ) {
+		$post = get_post( (int) $id );
+		return $post && 'attachment' === $post->post_type && wp_attachment_is_image( $post ) && current_user_can( 'read_post', $post->ID );
+	}
+
+	/**
+	 * Checks every supplied term and media ID before anything is written, so an
+	 * unknown ID cannot leave a saved event behind an error response.
+	 */
+	private static function validate_references( $params, $payload ) {
+		$term_fields = array(
+			'category_ids' => 'mec_category', 'location_ids' => 'mec_location', 'additional_location_ids' => 'mec_location',
+			'organizer_ids' => 'mec_organizer', 'additional_organizer_ids' => 'mec_organizer',
+			'label_ids' => 'mec_label', 'tag_ids' => 'mec_tag', 'speaker_ids' => 'mec_speaker', 'sponsor_ids' => 'mec_sponsor',
+		);
+		$checks = array();
+		foreach ( $term_fields as $key => $taxonomy ) {
+			if ( array_key_exists( $key, $params ) ) $checks[] = array( $key, $taxonomy, $payload['ids'][ $key ] );
+		}
+		// MEC uses location/organizer ID 1 to mean "hide", so 0 and 1 are not term references.
+		foreach ( array( 'location_id' => 'mec_location', 'organizer_id' => 'mec_organizer' ) as $key => $taxonomy ) {
+			if ( isset( $params[ $key ] ) && (int) $params[ $key ] > 1 ) $checks[] = array( $key, $taxonomy, array( (int) $params[ $key ] ) );
+		}
+		foreach ( $checks as $check ) {
+			list( $key, $taxonomy, $term_ids ) = $check;
+			if ( ! taxonomy_exists( $taxonomy ) ) continue;
+			foreach ( $term_ids as $term_id ) {
+				$term = self::term( $term_id, $taxonomy );
+				if ( ! $term || $taxonomy !== $term->taxonomy ) {
+					return self::error( 'invalid_calendar_term', $key . ' contains ' . (int) $term_id . ', which is not a ' . $taxonomy . ' term.', 400 );
+				}
+			}
+		}
+		if ( array_key_exists( 'featured_media', $params ) && $payload['featured_media'] > 0 && ! self::is_readable_image( $payload['featured_media'] ) ) {
+			return self::error( 'invalid_calendar_media', 'featured_media must be the ID of an image attachment.', 400 );
+		}
+		if ( $payload['has_gallery'] ) {
+			foreach ( $payload['ids']['gallery_media_ids'] as $media_id ) {
+				if ( ! self::is_readable_image( $media_id ) ) return self::error( 'invalid_calendar_media', 'gallery_media_ids contains ' . (int) $media_id . ', which is not an image attachment.', 400 );
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Core post fields for MEC's wp_insert_post() call. MEC passes only title,
+	 * content, type and status, so on an update WordPress would otherwise reset
+	 * the author to the current user and clear the password, slug, date, parent,
+	 * menu order and comment settings. Values are slashed because
+	 * wp_insert_post() unslashes the filtered data.
+	 */
+	private static function insert_overrides( $existing, $payload, $target_status, $scheduled_timestamp, $author_id ) {
+		$data = array( 'post_excerpt' => wp_slash( $payload['excerpt'] ) );
+		if ( null !== $author_id ) $data['post_author'] = (int) $author_id;
+		if ( $existing ) {
+			foreach ( array( 'post_parent', 'menu_order', 'comment_status', 'ping_status', 'post_content_filtered', 'post_mime_type', 'to_ping', 'pinged' ) as $field ) {
+				$data[ $field ] = wp_slash( $existing->$field );
+			}
+			if ( '' !== (string) $existing->post_name ) $data['post_name'] = wp_slash( $existing->post_name );
+			// WordPress clears the password when a post is made private.
+			if ( 'private' !== $target_status ) $data['post_password'] = wp_slash( $existing->post_password );
+			// Keep a fixed date; a draft's floating date is left for WordPress to set. A future
+			// date is not kept when publishing, which would publish the event with that date.
+			$fixed = '0000-00-00 00:00:00' !== $existing->post_date_gmt;
+			$future = $fixed && strtotime( $existing->post_date_gmt . ' UTC' ) > time();
+			if ( $fixed && ! ( $future && 'publish' === $target_status ) ) {
+				$data['post_date'] = $existing->post_date;
+				$data['post_date_gmt'] = $existing->post_date_gmt;
+			}
+		}
+		if ( $scheduled_timestamp ) {
+			$gmt = gmdate( 'Y-m-d H:i:s', $scheduled_timestamp );
+			$data['post_status'] = 'future';
+			$data['post_date_gmt'] = $gmt;
+			$data['post_date'] = get_date_from_gmt( $gmt );
+		}
+		return $data;
+	}
+
+	/** Number of wp_insert_post() calls currently on the call stack. */
+	private static function insert_depth() {
+		$depth = 0;
+		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS ) as $frame ) {
+			if ( 'wp_insert_post' === ( $frame['function'] ?? '' ) && empty( $frame['class'] ) ) $depth++;
+		}
+		return $depth;
+	}
+
+	/**
+	 * Runs MEC's save_event() with a one-shot wp_insert_post_data filter that applies
+	 * $overrides to MEC's own insert of this event only. On create every new event
+	 * has ID 0, so another plugin inserting a mec-events post while the filter is
+	 * installed (for example from an earlier wp_insert_post_data callback) must not
+	 * receive them. The filter therefore applies only to an insert that
+	 * - is the outermost wp_insert_post() since MEC was called (an insert started
+	 *   from inside MEC's insert, by any hook, is one level deeper), and
+	 * - was called with exactly the title, content, type, status and ID MEC was
+	 *   given. These are compared on wp_insert_post()'s third filter argument, the
+	 *   array exactly as MEC passed it, before WordPress sanitizes or slashes it.
+	 * It runs at PHP_INT_MIN so no later-registered callback runs first. The save
+	 * is verified afterwards, so a missed or misdirected override cannot return
+	 * success. The filter is removed again even if MEC throws.
+	 */
+	private static function run_mec_save( $args, $event_id, $overrides, &$applied ) {
+		$applied = false;
+		if ( ! function_exists( 'debug_backtrace' ) ) return self::error( 'calendar_save_unavailable', 'This PHP configuration disables debug_backtrace(), which the helper needs to scope its save.', 500 );
+		$expected = array( 'post_title' => $args['title'], 'post_content' => $args['content'], 'post_type' => self::POST_TYPE, 'post_status' => $args['status'] );
+		$base_depth = self::insert_depth();
+		$guard = function ( $data, $postarr, $raw = null ) use ( $event_id, $overrides, $expected, $base_depth, &$applied ) {
+			if ( $applied || ! is_array( $data ) || ! isset( $data['post_type'] ) || self::POST_TYPE !== $data['post_type'] || ! is_array( $raw ) ) return $data;
+			$target = ! empty( $raw['ID'] ) ? (int) $raw['ID'] : 0;
+			if ( $target !== (int) $event_id ) return $data;
+			foreach ( $expected as $key => $value ) {
+				if ( ! array_key_exists( $key, $raw ) || $raw[ $key ] !== $value ) return $data;
+			}
+			if ( self::insert_depth() !== $base_depth + 1 ) return $data;
+			$applied = true;
+			return array_merge( $data, $overrides );
+		};
+		add_filter( 'wp_insert_post_data', $guard, PHP_INT_MIN, 3 );
+		try {
+			return self::main()->save_event( $args, $event_id );
+		} finally {
+			remove_filter( 'wp_insert_post_data', $guard, PHP_INT_MIN );
+		}
+	}
+
 	private static function save_event( $params, $event_id = null ) {
+		$existing = $event_id ? get_post( $event_id ) : null;
 		$current = $event_id ? self::event_data( $event_id ) : null;
+		if ( $event_id && ( ! $existing || ! $current ) ) return self::event_not_found();
 		$payload = self::payload_args( $params, $current, ! $event_id );
 		if ( is_wp_error( $payload ) ) return $payload;
 		$scheduled_timestamp = null;
@@ -483,16 +833,46 @@ final class WPBridge_MEC_Helper {
 			if ( ! $scheduled_timestamp || $scheduled_timestamp <= time() ) return self::error( 'invalid_calendar_schedule', 'scheduled_for_gmt must be a future ISO-8601 timestamp.', 400 );
 		}
 		if ( 'future' === $payload['status'] && ! $scheduled_timestamp ) return self::error( 'calendar_schedule_time_required', 'scheduled_for_gmt is required when status is future.', 400 );
+		$authorized = self::check_write_permissions( $params, $payload, $scheduled_timestamp, ! $event_id );
+		if ( is_wp_error( $authorized ) ) return $authorized;
 		if ( $event_id ) {
 			if ( empty( $params['expected_calendar_sha256'] ) ) return self::error( 'calendar_version_required', 'expected_calendar_sha256 is required when updating an existing calendar event.', 409 );
 			$expected = strtolower( (string) $params['expected_calendar_sha256'] );
 			$actual = self::response( $current )['calendar_sha256'];
 			if ( ! preg_match( '/^[a-f0-9]{64}$/', $expected ) || ! hash_equals( $actual, $expected ) ) return self::error( 'calendar_event_changed', 'Calendar event changed since it was read. Read it again before applying the edit.', 409, array( 'calendar_sha256' => $actual ) );
 		}
-		$main = self::main();
-		$id = $main->save_event( $payload['args'], $event_id );
+		$references = self::validate_references( $params, $payload );
+		if ( is_wp_error( $references ) ) return $references;
+
+		$target_status = $scheduled_timestamp ? 'future' : $payload['status'];
+		// Keep the existing author unless author_id is sent (validated in check_write_permissions()).
+		$author_id = array_key_exists( 'author_id', $params ) ? (int) $params['author_id'] : ( $existing ? (int) $existing->post_author : null );
+		$overrides = self::insert_overrides( $existing, $payload, $target_status, $scheduled_timestamp, $author_id );
+		$args = $payload['args'];
+		// A scheduled save goes to MEC as a draft; the filter turns that single write into
+		// 'future' with the scheduled date, so the event is never published on the way.
+		$args['status'] = $scheduled_timestamp ? 'draft' : $target_status;
+		$applied = false;
+		$id = self::run_mec_save( $args, $event_id, $overrides, $applied );
 		if ( is_wp_error( $id ) ) return $id;
-		if ( $payload['excerpt'] !== '' || array_key_exists( 'excerpt', $params ) ) wp_update_post( array( 'ID' => $id, 'post_excerpt' => $payload['excerpt'] ) );
+		$id = (int) $id;
+		if ( $id < 1 || ( $event_id && $id !== (int) $event_id ) ) return self::error( 'calendar_save_failed', 'Modern Events Calendar did not save the event.', 500 );
+
+		$saved = get_post( $id );
+		$mismatch = array();
+		if ( ! $applied ) $mismatch[] = 'core_fields';
+		if ( ! $saved || ( null !== $author_id && (int) $saved->post_author !== $author_id ) ) $mismatch[] = 'author_id';
+		if ( ! $saved || $target_status !== $saved->post_status ) $mismatch[] = 'status';
+		// Every overridden core field must be on this event as sent (the overrides are
+		// slashed for wp_insert_post(), which unslashes them before saving).
+		foreach ( $overrides as $field => $value ) {
+			if ( 'post_author' === $field || 'post_status' === $field ) continue;
+			if ( ! $saved || (string) $saved->$field !== (string) wp_unslash( $value ) ) $mismatch[] = $field;
+		}
+		if ( $mismatch ) {
+			return self::error( 'calendar_save_unverified', 'The event was saved, but WordPress did not keep these fields as requested: ' . implode( ', ', $mismatch ) . '. Check the event in WordPress before editing it again.', 500, array( 'event_id' => $id, 'fields' => $mismatch ) );
+		}
+
 		$terms = self::assign_terms( $id, $payload['ids'] );
 		if ( is_wp_error( $terms ) ) return $terms;
 		if ( array_key_exists( 'featured_media', $params ) ) {
@@ -500,9 +880,6 @@ final class WPBridge_MEC_Helper {
 			else delete_post_thumbnail( $id );
 		}
 		if ( $payload['has_gallery'] ) update_post_meta( $id, 'mec_event_gallery', $payload['ids']['gallery_media_ids'] );
-		if ( $scheduled_timestamp ) {
-			wp_update_post( array( 'ID' => $id, 'post_status' => 'future', 'post_date_gmt' => gmdate( 'Y-m-d H:i:s', $scheduled_timestamp ), 'post_date' => get_date_from_gmt( gmdate( 'Y-m-d H:i:s', $scheduled_timestamp ) ) ) );
-		}
 		$data = self::event_data( $id );
 		return self::response( $data );
 	}
