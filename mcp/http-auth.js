@@ -57,11 +57,12 @@ export function parseAuthorization(header) {
   return token ? { kind: "bearer", token } : { kind: "malformed" };
 }
 
-export const OAUTH_SETTINGS = [
+// Names only, never values: these appear in startup error messages.
+const REQUIRED_REMOTE_VARS = [
   "WPBRIDGE_MCP_OAUTH_ISSUER", "WPBRIDGE_MCP_OAUTH_AUDIENCE", "WPBRIDGE_MCP_OAUTH_SUBJECT",
   "WPBRIDGE_MCP_OAUTH_JWKS_URL", "WPBRIDGE_MCP_PUBLIC_URL",
 ];
-const OPTIONAL_OAUTH_SETTINGS = ["WPBRIDGE_MCP_OAUTH_SCOPE", "WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM", "WPBRIDGE_MCP_OAUTH_ALGORITHMS"];
+const OPTIONAL_REMOTE_VARS = ["WPBRIDGE_MCP_OAUTH_SCOPE", "WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM", "WPBRIDGE_MCP_OAUTH_ALGORITHMS"];
 export const LOCAL_TOKEN_HTTP = "WPBRIDGE_MCP_LOCAL_TOKEN_HTTP";
 export const LOCAL_TOKEN_WARNING = "WARNING: HTTP MCP is running in local-token mode. Never route this port through a tunnel or reverse proxy; the loopback Host and proxy-header checks reduce that risk but cannot remove it. Use OAuth for anything remote.";
 
@@ -73,12 +74,12 @@ const isSet = (value) => value !== undefined && value !== null && String(value).
 // setup, or OAuth together with the opt-in, refuses to start rather than
 // falling back to the weaker mode.
 export function httpAuthMode(env) {
-  const oauthSet = OAUTH_SETTINGS.filter((name) => isSet(env[name]));
-  const optionalSet = OPTIONAL_OAUTH_SETTINGS.filter((name) => isSet(env[name]));
+  const requiredSet = REQUIRED_REMOTE_VARS.filter((name) => isSet(env[name]));
+  const optionalSet = OPTIONAL_REMOTE_VARS.filter((name) => isSet(env[name]));
   const optIn = env[LOCAL_TOKEN_HTTP];
-  if (oauthSet.length || optionalSet.length) {
+  if (requiredSet.length || optionalSet.length) {
     if (isSet(optIn)) throw new Error(`${LOCAL_TOKEN_HTTP} cannot be combined with OAuth settings; remove one of them.`);
-    const missing = OAUTH_SETTINGS.filter((name) => !oauthSet.includes(name));
+    const missing = REQUIRED_REMOTE_VARS.filter((name) => !requiredSet.includes(name));
     if (missing.length) throw new Error(`Incomplete OAuth configuration; also set ${missing.join(", ")}.`);
     return "oauth";
   }
