@@ -17,7 +17,8 @@
   are canonicalised and share a bucket per /64; IPv4-mapped addresses count as
   IPv4. Header-driven rejects also spend a throttle token. The public host is
   accepted with or without its default port (`:443`). Every early response
-  closes the connection, a body over 2 MB gets 413, and a client disconnecting
+  closes the connection, as does the metadata response; a metadata GET that
+  declares a body gets 400; a body over 2 MB gets 413, and a client disconnecting
   mid-body no longer causes an unhandled rejection. New optional settings:
   `WPBRIDGE_MCP_RATE_LIMIT_BURST` (30) and `WPBRIDGE_MCP_RATE_LIMIT_PER_SECOND` (5).
 - Breaking: HTTP MCP now requires OAuth. Local-token HTTP starts only with
@@ -42,13 +43,18 @@
   `scopes: []`), and `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM=scp`
   reads it from an `scp` claim. Protected-resource metadata is also served at
   `/.well-known/oauth-protected-resource/mcp`.
-- HTTP MCP logs failed authentication and pre-auth rejections to stderr as one
-  JSON line with a reason code, `Cf-Ray`, client key and the unverified token
-  `kid`, `iss` and `aud`. The presented token, the `Authorization` header and
+- HTTP MCP logs failed authentication and these pre-auth rejections to stderr:
+  duplicate headers (400), Host, proxy-header and Origin rejections (403) and
+  throttling (429). Unknown paths (404), wrong methods (405), oversized bodies
+  (413), unparsable JSON (400) and metadata requests with a body (400) are not
+  logged. Each logged event is one JSON line with a reason code, `Cf-Ray`,
+  client key and the unverified token `kid`, `iss` and `aud`. The presented token, the `Authorization` header and
   `sub` are never logged; the hints and any rejected Host or Origin are
   attacker-controlled, so they are clipped and control characters and Unicode
   line separators are escaped. Lines are deduplicated by event, reason, client
-  and status, and capped at 100 per minute overall.
+  and status, and capped at 100 per minute overall; the count of lines dropped
+  by the cap is written as one `log_suppressed` line when the next event
+  arrives after the minute rolls over (not on a timer).
 - The `upload_attached_media` description now says it works only with ChatGPT
   file attachments.
 

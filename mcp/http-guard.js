@@ -155,10 +155,13 @@ export function sanitizeLogValue(value) {
 
 // One JSON line per event on stderr (stdout carries MCP in stdio mode).
 // Events with the same event, reason, client and status within the window are
-// counted instead of repeated; the next emitted line reports the count. The
-// identity never includes attacker-chosen values such as Host, Origin or token
-// hints. On top of that, at most maxLinesPerWindow lines are written per
-// window; the rest are dropped and reported as one log_suppressed line.
+// counted instead of repeated; the next line emitted for that identity reports
+// the count as `repeated`. The identity never includes attacker-chosen values
+// such as Host, Origin or token hints. On top of that, at most
+// maxLinesPerWindow lines are written per window; the rest are dropped and
+// counted. There is no timer: the log_suppressed line with that count is
+// written when the next event arrives after the window has rolled over, so it
+// never appears if logging stops.
 export function createSecurityLog({
   write = (line) => process.stderr.write(`${line}\n`), now = Date.now, windowMs = 60_000, maxKeys = 1000, maxLinesPerWindow = 100,
 } = {}) {
@@ -217,8 +220,11 @@ export function createRequestGuard({ auth, port, throttle, log = () => {} }) {
     log({ event: "request_rejected", status: 429, reason: "rate_limited", cf_ray: cfRay(req), client });
     return { ok: false, status: 429, reason: "rate_limited", headers: { "retry-after": String(retryAfter) } };
   };
-  // Rejections driven by attacker-chosen headers spend a throttle token before
-  // they are logged, so a flood is answered with 429 and logs are bounded.
+  // Rejections driven by attacker-chosen headers (duplicate headers, Host,
+  // proxy headers, Origin) spend a throttle token before they are logged, so a
+  // flood is answered with 429 and logs are bounded. Only these and 429 are
+  // logged here; the 404 for an unknown path and the 405 for a wrong method
+  // are returned without logging or spending a token.
   const deny = (req, client, status, reason, details = {}) => {
     const taken = throttle.take(client);
     if (!taken.ok) return limited(req, client, taken.retryAfter);

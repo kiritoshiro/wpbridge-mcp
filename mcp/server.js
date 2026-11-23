@@ -189,8 +189,18 @@ export function createHttpHandler({ gateway, auth, port, throttle = createThrott
     const checked = guard.check(req);
     if (!checked.ok) { endEarly(res, checked.status, checked.headers); return; }
     if (checked.route === "metadata") {
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify(auth.resourceMetadata));
+      // Metadata needs no body. One that declares a body is refused, and every
+      // answer closes the socket, so unauthenticated clients cannot park
+      // connections waiting for a body that never comes.
+      const length = req.headers["content-length"];
+      if (req.headers["transfer-encoding"] !== undefined || (length !== undefined && Number(length) !== 0)) {
+        endEarly(res, 400);
+        return;
+      }
+      const metadata = JSON.stringify(auth.resourceMetadata);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", connection: "close",
+        "content-length": Buffer.byteLength(metadata) });
+      res.end(metadata);
       return;
     }
     const result = await auth.authorize(req.headers.authorization);

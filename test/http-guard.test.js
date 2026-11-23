@@ -526,6 +526,30 @@ test("an unauthenticated request declaring a huge body is answered and its socke
   } });
 });
 
+test("metadata requests that declare a body get 400 and the socket closes; plain GETs get 200 and close", async () => {
+  await withServer({ run: async ({ port, counter }) => {
+    for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+      const head = `GET ${path} HTTP/1.1\r\nHost: mcp.example.com\r\nCf-Connecting-IP: 203.0.113.10\r\n`;
+      for (const [label, framing] of [["declared length", "Content-Length: 100000000\r\n\r\n"],
+        ["unfinished chunked", "Transfer-Encoding: chunked\r\n\r\n10\r\nabc"]]) {
+        const response = await rawRequest(port, `${head}${framing}`);
+        assert.match(response.data, /^HTTP\/1\.1 400 /, `${path} ${label}`);
+        assert.match(response.data, /connection: close/i, `${path} ${label}`);
+        assert.equal(response.closed, true, `${path} ${label}: the server closed the socket`);
+        assert.ok(response.ms < 2000, `${path} ${label}: closed promptly`);
+      }
+      const ok = await rawRequest(port, `${head}\r\n`);
+      assert.match(ok.data, /^HTTP\/1\.1 200 /, path);
+      assert.match(ok.data, /connection: close/i, path);
+      assert.match(ok.data, /content-type: application\/json/i, path);
+      assert.equal(JSON.parse(ok.data.slice(ok.data.indexOf("\r\n\r\n") + 4)).resource, "https://mcp.example.com/mcp");
+      assert.equal(ok.closed, true, `${path}: the server closed the socket`);
+      assert.ok(ok.ms < 2000, `${path}: closed promptly`);
+    }
+    assert.equal(counter.calls, 0);
+  } });
+});
+
 test("oversized bodies get 413 and the socket is closed", async () => {
   await withServer({ mode: "local-token", run: async ({ port }) => {
     const head = `POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${localToken}\r\n`;
