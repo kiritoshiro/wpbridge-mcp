@@ -4,29 +4,51 @@
 
 - Security: harden the HTTP MCP transport for remote HTTPS + OAuth use.
   Requests are checked in this order before any token work: path (only `/mcp`
-  and the protected-resource metadata paths), Host (the public URL's host or
-  loopback on the configured port), Origin (absent, the public origin or a
-  loopback origin; otherwise 403), method (405 without running auth), then a
-  bounded per-client token bucket (429 with `Retry-After`; client is
-  `Cf-Connecting-IP` from a loopback peer, otherwise the peer address).
-  Local-token mode accepts loopback Hosts only and refuses proxied requests,
-  so a tunnel cannot expose the static token. New optional settings:
+  and the protected-resource metadata paths), duplicate headers, Host (the
+  public URL's host or loopback on the configured port), proxy headers, Origin
+  (absent, the public origin or a loopback origin; otherwise 403), method (405
+  without running auth), then a bounded per-client token bucket (429 with
+  `Retry-After`; client is `Cf-Connecting-IP` for public-Host requests from the
+  loopback tunnel, otherwise the peer address).
+  Duplicate `Host`, `Authorization`, `Origin`, `Cf-Connecting-IP` or `Cf-Ray`
+  headers get 400. A loopback Host carrying proxy headers is refused, and a
+  public-Host request from the tunnel must carry exactly one valid
+  `Cf-Connecting-IP` (403 `proxy_client_ip_missing` otherwise). IPv6 clients
+  are canonicalised and share a bucket per /64; IPv4-mapped addresses count as
+  IPv4. Header-driven rejects also spend a throttle token. The public host is
+  accepted with or without its default port (`:443`). Every early response
+  closes the connection, a body over 2 MB gets 413, and a client disconnecting
+  mid-body no longer causes an unhandled rejection. New optional settings:
   `WPBRIDGE_MCP_RATE_LIMIT_BURST` (30) and `WPBRIDGE_MCP_RATE_LIMIT_PER_SECOND` (5).
+- Breaking: HTTP MCP now requires OAuth. Local-token HTTP starts only with
+  `WPBRIDGE_MCP_LOCAL_TOKEN_HTTP=1` (exactly `1`) and prints a startup warning;
+  it is for a client on the same machine and must never be routed through a
+  tunnel or proxy, since loopback Host and proxy-header checks reduce but cannot
+  eliminate that risk. Partial OAuth settings, or OAuth settings together with
+  the opt-in, refuse to start. Stdio, used by the Codex and Claude Code
+  plugins, is unchanged.
 - Security: OAuth verification pins the JWS algorithms
   (`WPBRIDGE_MCP_OAUTH_ALGORITHMS`, default `RS256`; `none` and `HS*` are
-  refused) and allows 30 seconds of clock drift. Invalid tokens get 401 with
+  refused, as is a value that lists no algorithm) and allows 30 seconds of
+  clock drift. Invalid tokens get 401 with
   `error="invalid_token"`; a valid token for another subject or without the
   scope now gets 403 with `error="insufficient_scope"` instead of 401. A request
-  without a token gets a challenge without an error code (RFC 6750).
+  without a token, or with another scheme, gets a challenge without an error
+  code, and a malformed `Bearer` header gets 400 with `error="invalid_request"`
+  (RFC 6750).
 - OAuth: the required scope is configurable (`WPBRIDGE_MCP_OAUTH_SCOPE`, default
   `wpbridge:access`; empty turns the requirement and its advertisement off, for
-  providers without custom scopes), and `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM=scp`
+  providers without custom scopes; tool `securitySchemes` then carry
+  `scopes: []`), and `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM=scp`
   reads it from an `scp` claim. Protected-resource metadata is also served at
   `/.well-known/oauth-protected-resource/mcp`.
-- HTTP MCP logs failed authentication and Host, Origin or throttle rejections
-  to stderr as one JSON line with a reason code, `Cf-Ray`, client key and the
-  unverified token `kid`, `iss` and `aud` only; tokens, the `Authorization`
-  header and `sub` are never logged, and identical lines are rate-limited.
+- HTTP MCP logs failed authentication and pre-auth rejections to stderr as one
+  JSON line with a reason code, `Cf-Ray`, client key and the unverified token
+  `kid`, `iss` and `aud`. The presented token, the `Authorization` header and
+  `sub` are never logged; the hints and any rejected Host or Origin are
+  attacker-controlled, so they are clipped and control characters and Unicode
+  line separators are escaped. Lines are deduplicated by event, reason, client
+  and status, and capped at 100 per minute overall.
 - The `upload_attached_media` description now says it works only with ChatGPT
   file attachments.
 
