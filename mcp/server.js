@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { groups, operations } from "../lib/gpt-api.js";
 import { createHttpAuth } from "./http-auth.js";
+import { cfRay, createRequestGuard, createSecurityLog, createThrottle, parseRateLimit } from "./http-guard.js";
 import { loadEnvFile } from "../lib/config.js";
 import { createGateway, loadSites, siteControlActions } from "./gateway.js";
 import { idempotencyKeyPattern, readLocalMedia, resolveUploadDir } from "./local-media.js";
@@ -80,7 +81,7 @@ export function buildMcpServer(gateway, { securitySchemes = null, localUploadDir
   if (chatGptFiles) {
     server.registerTool("upload_attached_media", {
       title: "Upload attached media to one WordPress site",
-      description: "Upload user-provided image, audio, PDF, DOCX, or ZIP files to a connected site. Use a new idempotency key for each logical upload. The bridge validates source URL, file type, signature, and size.",
+      description: "ChatGPT file attachments only: upload image, audio, PDF, DOCX, or ZIP files the user attached in ChatGPT to a connected site. Other clients cannot supply these files; download_url must be the ChatGPT-provided attachment URL, and other URLs are refused. Use a new idempotency key for each logical upload. The bridge validates source URL, file type, signature, and size.",
       inputSchema: {
         site_id: z.string(),
         files: z.array(z.object({
@@ -142,19 +143,35 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const auth = createHttpAuth(env);
   const port = Number(env.WPBRIDGE_MCP_PORT || 8790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid MCP port.");
-  http.createServer(async (req, res) => {
-    if (auth.resourceMetadata && req.method === "GET" &&
-        req.url === "/.well-known/oauth-protected-resource") {
+  const throttle = createThrottle(parseRateLimit(env));
+  http.createServer(createHttpHandler({ gateway, auth, port, throttle }))
+    .listen(port, host, () => console.error(`WPBridge MCP listening on http://${host}:${port}/mcp`));
+}
+
+// Request order: path, Host, Origin, method and throttling run in
+// createRequestGuard before any token is looked at; only then authentication,
+// the 2 MB body cap and the MCP transport.
+export function createHttpHandler({ gateway, auth, port, throttle = createThrottle(), log = createSecurityLog() }) {
+  const guard = createRequestGuard({ auth, port, throttle, log });
+  return async (req, res) => {
+    const checked = guard.check(req);
+    if (!checked.ok) {
+      res.writeHead(checked.status, { "cache-control": "no-store", ...checked.headers }).end();
+      return;
+    }
+    if (checked.route === "metadata") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(auth.resourceMetadata));
       return;
     }
-    if (req.url !== "/mcp") { res.writeHead(404).end(); return; }
-    if (!(await auth.authorized(req.headers.authorization))) {
-      res.writeHead(401, { "cache-control": "no-store", "www-authenticate": auth.challenge }).end();
+    const result = await auth.authorize(req.headers.authorization);
+    if (!result.ok) {
+      // Never the token, the Authorization header, sub or other claims.
+      log({ event: "auth_failed", status: result.status, reason: result.reason, cf_ray: cfRay(req),
+        client: checked.client, ...(result.unverified || {}) });
+      res.writeHead(result.status, { "cache-control": "no-store", "www-authenticate": result.wwwAuthenticate }).end();
       return;
     }
-    if (req.method !== "POST") { res.writeHead(405).end(); return; }
     let size = 0;
     const chunks = [];
     for await (const chunk of req) {
@@ -176,7 +193,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       await transport.close();
       await server.close();
     }
-  }).listen(port, host, () => console.error(`WPBridge MCP listening on http://${host}:${port}/mcp`));
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
