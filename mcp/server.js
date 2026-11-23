@@ -6,7 +6,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { groups, operations } from "../lib/gpt-api.js";
-import { createHttpAuth } from "./http-auth.js";
+import { createHttpAuth, LOCAL_TOKEN_WARNING } from "./http-auth.js";
+import { cfRay, createRequestGuard, createSecurityLog, createThrottle, parseRateLimit } from "./http-guard.js";
 import { loadEnvFile } from "../lib/config.js";
 import { createGateway, loadSites, siteControlActions } from "./gateway.js";
 import { idempotencyKeyPattern, readLocalMedia, resolveUploadDir } from "./local-media.js";
@@ -80,7 +81,7 @@ export function buildMcpServer(gateway, { securitySchemes = null, localUploadDir
   if (chatGptFiles) {
     server.registerTool("upload_attached_media", {
       title: "Upload attached media to one WordPress site",
-      description: "Upload user-provided image, audio, PDF, DOCX, or ZIP files to a connected site. Use a new idempotency key for each logical upload. The bridge validates source URL, file type, signature, and size.",
+      description: "ChatGPT file attachments only: upload image, audio, PDF, DOCX, or ZIP files the user attached in ChatGPT to a connected site. Other clients cannot supply these files; download_url must be the ChatGPT-provided attachment URL, and other URLs are refused. Use a new idempotency key for each logical upload. The bridge validates source URL, file type, signature, and size.",
       inputSchema: {
         site_id: z.string(),
         files: z.array(z.object({
@@ -140,43 +141,106 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const host = env.WPBRIDGE_MCP_HOST || "127.0.0.1";
   if (!["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("HTTP MCP must bind to loopback. Use an OAuth-aware proxy for remote clients.");
   const auth = createHttpAuth(env);
+  if (auth.mode === "local-token") console.error(LOCAL_TOKEN_WARNING);
   const port = Number(env.WPBRIDGE_MCP_PORT || 8790);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid MCP port.");
-  http.createServer(async (req, res) => {
-    if (auth.resourceMetadata && req.method === "GET" &&
-        req.url === "/.well-known/oauth-protected-resource") {
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify(auth.resourceMetadata));
-      return;
-    }
-    if (req.url !== "/mcp") { res.writeHead(404).end(); return; }
-    if (!(await auth.authorized(req.headers.authorization))) {
-      res.writeHead(401, { "cache-control": "no-store", "www-authenticate": auth.challenge }).end();
-      return;
-    }
-    if (req.method !== "POST") { res.writeHead(405).end(); return; }
-    let size = 0;
+  const throttle = createThrottle(parseRateLimit(env));
+  http.createServer(createHttpHandler({ gateway, auth, port, throttle }))
+    .listen(port, host, () => console.error(`WPBridge MCP listening on http://${host}:${port}/mcp`));
+}
+
+const MAX_BODY_BYTES = 2_000_000;
+
+// Every early answer closes the connection: Node then stops reading the request
+// body and destroys the socket once the response is flushed, so a large or slow
+// unauthenticated body cannot hold the socket open.
+function endEarly(res, status, headers = {}) {
+  if (res.headersSent || res.destroyed || !res.socket || res.socket.destroyed) { res.destroy(); return; }
+  res.writeHead(status, { "cache-control": "no-store", connection: "close", ...headers }).end();
+}
+
+// Reads the body up to the cap. Resolves null when the cap is exceeded (the
+// rest is discarded until the 413 is flushed and the socket closes) and
+// rejects when the client disconnects or the stream fails.
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
     const chunks = [];
-    for await (const chunk of req) {
+    let size = 0;
+    let settled = false;
+    const settle = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+    req.on("data", (chunk) => {
+      if (settled) return;
       size += chunk.length;
-      if (size > 2_000_000) { res.writeHead(413).end(); return; }
+      if (size > limit) { chunks.length = 0; settle(resolve, null); return; }
       chunks.push(chunk);
+    });
+    req.on("end", () => settle(resolve, Buffer.concat(chunks)));
+    req.on("error", (error) => settle(reject, error));
+    req.on("close", () => settle(reject, new Error("request closed before the body ended")));
+  });
+}
+
+// Request order: path, duplicate headers, Host, proxy headers, Origin, method
+// and throttling run in createRequestGuard before any token is looked at; only
+// then authentication, the 2 MB body cap and the MCP transport.
+export function createHttpHandler({ gateway, auth, port, throttle = createThrottle(), log = createSecurityLog() }) {
+  const guard = createRequestGuard({ auth, port, throttle, log });
+  async function handle(req, res) {
+    const checked = guard.check(req);
+    if (!checked.ok) { endEarly(res, checked.status, checked.headers); return; }
+    if (checked.route === "metadata") {
+      // Metadata needs no body. One that declares a body is refused, and every
+      // answer closes the socket, so unauthenticated clients cannot park
+      // connections waiting for a body that never comes.
+      const length = req.headers["content-length"];
+      if (req.headers["transfer-encoding"] !== undefined || (length !== undefined && Number(length) !== 0)) {
+        endEarly(res, 400);
+        return;
+      }
+      const metadata = JSON.stringify(auth.resourceMetadata);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", connection: "close",
+        "content-length": Buffer.byteLength(metadata) });
+      res.end(metadata);
+      return;
     }
+    const result = await auth.authorize(req.headers.authorization);
+    if (!result.ok) {
+      // Never the presented token or the Authorization header; the unverified
+      // kid, iss and aud hints are clipped and sanitised by the log.
+      log({ event: "auth_failed", status: result.status, reason: result.reason, cf_ray: cfRay(req),
+        client: checked.client, ...(result.unverified || {}) });
+      endEarly(res, result.status, { "www-authenticate": result.wwwAuthenticate });
+      return;
+    }
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) { endEarly(res, 413); return; }
+    const raw = await readBody(req, MAX_BODY_BYTES);
+    if (raw === null) { endEarly(res, 413); return; }
     let body;
-    try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
-    catch { res.writeHead(400).end(); return; }
+    try { body = JSON.parse(raw.toString("utf8")); }
+    catch { endEarly(res, 400); return; }
     const server = buildMcpServer(gateway, { securitySchemes: auth.securitySchemes });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch {
-      if (!res.headersSent) res.writeHead(500).end();
+      if (!res.headersSent) endEarly(res, 500);
     } finally {
       await transport.close();
       await server.close();
     }
-  }).listen(port, host, () => console.error(`WPBridge MCP listening on http://${host}:${port}/mcp`));
+  }
+  return async (req, res) => {
+    // A client that disconnects mid-body must not become an unhandled error.
+    req.on("error", () => {});
+    res.on("error", () => {});
+    try {
+      await handle(req, res);
+    } catch {
+      endEarly(res, 400);
+    }
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

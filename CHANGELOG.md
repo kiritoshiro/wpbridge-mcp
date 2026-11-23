@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+- Security: harden the HTTP MCP transport for remote HTTPS + OAuth use.
+  Requests are checked in this order before any token work: path (only `/mcp`
+  and the protected-resource metadata paths), duplicate headers, Host (the
+  public URL's host or loopback on the configured port), proxy headers, Origin
+  (absent, the public origin or a loopback origin; otherwise 403), method (405
+  without running auth), then a bounded per-client token bucket (429 with
+  `Retry-After`; client is `Cf-Connecting-IP` for public-Host requests from the
+  loopback tunnel, otherwise the peer address).
+  Duplicate `Host`, `Authorization`, `Origin`, `Cf-Connecting-IP` or `Cf-Ray`
+  headers get 400. A loopback Host carrying proxy headers is refused, and a
+  public-Host request from the tunnel must carry exactly one valid
+  `Cf-Connecting-IP` (403 `proxy_client_ip_missing` otherwise). IPv6 clients
+  are canonicalised and share a bucket per /64; IPv4-mapped addresses count as
+  IPv4. Header-driven rejects also spend a throttle token. The public host is
+  accepted with or without its default port (`:443`). Every early response
+  closes the connection, as does the metadata response; a metadata GET that
+  declares a body gets 400; a body over 2 MB gets 413, and a client disconnecting
+  mid-body no longer causes an unhandled rejection. New optional settings:
+  `WPBRIDGE_MCP_RATE_LIMIT_BURST` (30) and `WPBRIDGE_MCP_RATE_LIMIT_PER_SECOND` (5).
+- Breaking: HTTP MCP now requires OAuth. Local-token HTTP starts only with
+  `WPBRIDGE_MCP_LOCAL_TOKEN_HTTP=1` (exactly `1`) and prints a startup warning;
+  it is for a client on the same machine and must never be routed through a
+  tunnel or proxy, since loopback Host and proxy-header checks reduce but cannot
+  eliminate that risk. Partial OAuth settings, or OAuth settings together with
+  the opt-in, refuse to start. Stdio, used by the Codex and Claude Code
+  plugins, is unchanged.
+- Security: OAuth verification pins the JWS algorithms
+  (`WPBRIDGE_MCP_OAUTH_ALGORITHMS`, default `RS256`; `none` and `HS*` are
+  refused, as is a value that lists no algorithm) and allows 30 seconds of
+  clock drift. Invalid tokens get 401 with
+  `error="invalid_token"`; a valid token for another subject or without the
+  scope now gets 403 with `error="insufficient_scope"` instead of 401. A request
+  without a token, or with another scheme, gets a challenge without an error
+  code, and a malformed `Bearer` header gets 400 with `error="invalid_request"`
+  (RFC 6750).
+- OAuth: the required scope is configurable (`WPBRIDGE_MCP_OAUTH_SCOPE`, default
+  `wpbridge:access`; empty turns the requirement and its advertisement off, for
+  providers without custom scopes; tool `securitySchemes` then carry
+  `scopes: []`), and `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM=scp`
+  reads it from an `scp` claim. Protected-resource metadata is also served at
+  `/.well-known/oauth-protected-resource/mcp`.
+- HTTP MCP logs failed authentication and these pre-auth rejections to stderr:
+  duplicate headers (400), Host, proxy-header and Origin rejections (403) and
+  throttling (429). Unknown paths (404), wrong methods (405), oversized bodies
+  (413), unparsable JSON (400) and metadata requests with a body (400) are not
+  logged. Each logged event is one JSON line with a reason code, `Cf-Ray`,
+  client key and the unverified token `kid`, `iss` and `aud`. The presented token, the `Authorization` header and
+  `sub` are never logged; the hints and any rejected Host or Origin are
+  attacker-controlled, so they are clipped and control characters and Unicode
+  line separators are escaped. Lines are deduplicated by event, reason, client
+  and status, and capped at 100 event lines per minute overall; the count of
+  lines dropped by the cap is written as one extra `log_suppressed` line (so
+  up to 101 lines a minute) when the next event arrives after the minute rolls
+  over (not on a timer).
+- The `upload_attached_media` description now says it works only with ChatGPT
+  file attachments.
+
 - Security: harden the MEC calendar helper (1.0.2) authorization using the
   `mec-events` post type and MEC taxonomy capability objects. Listings only
   return events the user may read (others' drafts/pending/future need
