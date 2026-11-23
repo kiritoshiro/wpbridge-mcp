@@ -2,7 +2,7 @@
 
 Control explicitly connected WordPress sites through a self-hosted MCP gateway.
 This repository contains the per-site editorial bridge, the multi-site MCP
-server, a Codex plugin, and optional WordPress companion plugins. Each site
+server, a Codex and Claude Code plugin, and optional WordPress companion plugins. Each site
 has its own credentials and allowed actions. Start with the [MCP setup guide](MCP-SETUP.md).
 
 The earlier Custom GPT Action API remains available for existing clients.

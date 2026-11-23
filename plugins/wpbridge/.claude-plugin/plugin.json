@@ -1,0 +1,17 @@
+{
+  "name": "wpbridge",
+  "displayName": "WPBridge",
+  "version": "0.1.0",
+  "description": "Control explicitly connected WordPress sites through guarded WPBridge MCP tools.",
+  "author": {
+    "name": "WPBridge"
+  },
+  "repository": "https://github.com/kiritoshiro/wpbridge-mcp",
+  "keywords": ["wordpress", "mcp", "editorial"],
+  "mcpServers": {
+    "wpbridge": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/launcher.mjs"]
+    }
+  }
+}
