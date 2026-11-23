@@ -1,49 +1,100 @@
 import net from "node:net";
 
 // Cheap checks that run before any authentication or JWT work on the HTTP MCP
-// transport: path, Host, Origin, method, then a per-client token bucket.
+// transport: path, duplicate headers, Host, proxy headers, Origin, method, then
+// a per-client token bucket.
 
 export const METADATA_PATHS = new Set([
   "/.well-known/oauth-protected-resource",
   "/.well-known/oauth-protected-resource/mcp",
 ]);
 const LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "[::1]"];
-// A reverse proxy or tunnel adds at least one of these. The local static token
-// must never be reachable through one, even if the proxy rewrites Host.
+// A reverse proxy or tunnel adds at least one of these. A request that names a
+// loopback Host must not carry them: the proxy should pass the public Host
+// through, and the local static token must not be reached through a proxy.
 const PROXY_HEADERS = ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "x-forwarded-host", "forwarded"];
+// Headers whose repetition would let different parsers disagree about a
+// security decision; a request repeating any of them is refused.
+const SINGLE_HEADERS = ["host", "authorization", "origin", "cf-connecting-ip", "cf-ray"];
+const DEFAULT_PORTS = { "https:": "443", "http:": "80" };
 
-function normalizeIp(value) {
-  let ip = String(value || "").trim().toLowerCase();
-  if (ip.startsWith("[") && ip.endsWith("]")) ip = ip.slice(1, -1);
-  if (ip.startsWith("::ffff:") && net.isIP(ip.slice(7)) === 4) ip = ip.slice(7);
-  return ip;
+// Canonical form of an address: { family: 4, ip } or { family: 6, groups }
+// with all eight 16-bit groups. IPv4-mapped IPv6 (::ffff:a.b.c.d or
+// ::ffff:xxxx:xxxx) is treated as IPv4. Returns null for anything else.
+export function canonicalIp(value) {
+  let text = String(value ?? "").trim().toLowerCase();
+  if (text.startsWith("[") && text.endsWith("]")) text = text.slice(1, -1);
+  const family = net.isIP(text);
+  if (family === 4) return { family: 4, ip: text };
+  if (family !== 6) return null;
+  text = text.split("%")[0];
+  const lastColon = text.lastIndexOf(":");
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes(".")) {
+    if (net.isIP(tail) !== 4) return null;
+    const [a, b, c, d] = tail.split(".").map(Number);
+    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const split = (part) => (part ? part.split(":") : []);
+  const head = split(halves[0]);
+  const rest = halves.length === 2 ? split(halves[1]) : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (fill < 0) return null;
+  const parts = [...head, ...Array(fill).fill("0"), ...rest];
+  if (parts.length !== 8 || !parts.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return null;
+  const groups = parts.map((group) => parseInt(group, 16));
+  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+    return { family: 4, ip: [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".") };
+  }
+  return { family: 6, groups };
 }
 
-function isLoopbackIp(ip) {
-  return ip === "::1" || (net.isIP(ip) === 4 && ip.startsWith("127."));
+function isLoopback(addr) {
+  if (!addr) return false;
+  if (addr.family === 4) return addr.ip.startsWith("127.");
+  return addr.groups.slice(0, 7).every((group) => group === 0) && addr.groups[7] === 1;
 }
 
 // IPv6 clients usually control a whole /64, so they share one bucket.
-function ipv6Prefix64(ip) {
-  const [head, tail] = ip.split("::");
-  const count = (part) => (part ? part.split(":").reduce((n, g) => n + (g.includes(".") ? 2 : 1), 0) : 0);
-  const headGroups = head ? head.split(":") : [];
-  const groups = tail === undefined ? headGroups : [...headGroups, ...Array(Math.max(0, 8 - count(head) - count(tail))).fill("0")];
-  const prefix = [...groups, "0", "0", "0", "0"].slice(0, 4).map((g) => g.replace(/^0+(?=.)/, ""));
-  return `${prefix.join(":")}::/64`;
+function addressKey(addr) {
+  if (addr.family === 4) return addr.ip;
+  if (isLoopback(addr)) return "::1";
+  return `${addr.groups.slice(0, 4).map((group) => group.toString(16)).join(":")}::/64`;
+}
+
+// Values of one header as a list: repeated headers stay separate.
+function headerValues(req, name) {
+  const distinct = req?.headersDistinct?.[name];
+  if (Array.isArray(distinct)) return distinct;
+  const raw = req?.rawHeaders;
+  if (Array.isArray(raw)) {
+    const values = [];
+    for (let i = 0; i + 1 < raw.length; i += 2) if (String(raw[i]).toLowerCase() === name) values.push(raw[i + 1]);
+    return values;
+  }
+  const value = req?.headers?.[name];
+  return value === undefined ? [] : [].concat(value);
+}
+
+// The client IP from exactly one valid Cf-Connecting-IP header, or null.
+function forwardedClient(req) {
+  const values = headerValues(req, "cf-connecting-ip");
+  return values.length === 1 ? canonicalIp(values[0]) : null;
 }
 
 // The server binds to loopback only, so a loopback peer is cloudflared (or a
-// local process). Cf-Connecting-IP is trusted only from such a peer.
-export function clientKey(req) {
-  const remote = normalizeIp(req?.socket?.remoteAddress);
-  let ip = remote;
-  if (isLoopbackIp(remote)) {
-    const forwarded = normalizeIp(req?.headers?.["cf-connecting-ip"]);
-    if (net.isIP(forwarded)) ip = forwarded;
+// local process). Cf-Connecting-IP is used only from such a peer, and the
+// guard passes trustForwarded only for requests to the public host.
+export function clientKey(req, trustForwarded = true) {
+  const remote = canonicalIp(req?.socket?.remoteAddress);
+  if (!remote) return "unknown";
+  if (trustForwarded && isLoopback(remote)) {
+    const forwarded = forwardedClient(req);
+    if (forwarded) return addressKey(forwarded);
   }
-  if (!ip) return "unknown";
-  return net.isIP(ip) === 6 && !isLoopbackIp(ip) ? ipv6Prefix64(ip) : ip;
+  return addressKey(remote);
 }
 
 function parseLimit(env, name, fallback, { min, max, integer }) {
@@ -90,21 +141,52 @@ export function createThrottle({ burst = 30, perSecond = 5, maxEntries = 10_000,
   };
 }
 
+// C0 and C1 controls (which include U+0085), DEL, the Unicode line and
+// paragraph separators, and bidi overrides are escaped as \uXXXX text so an
+// attacker-supplied value cannot split or disguise a log record.
+const UNSAFE_LOG_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+export function sanitizeLogValue(value) {
+  if (typeof value === "string") {
+    return value.replace(UNSAFE_LOG_CHARS, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  }
+  if (Array.isArray(value)) return value.map(sanitizeLogValue);
+  return value;
+}
+
 // One JSON line per event on stderr (stdout carries MCP in stdio mode).
-// Identical events within the window (ignoring the per-request Cf-Ray) are
-// counted instead of repeated; the next emitted line reports the count.
-export function createSecurityLog({ write = (line) => process.stderr.write(`${line}\n`), now = Date.now, windowMs = 60_000, maxKeys = 1000 } = {}) {
+// Events with the same event, reason, client and status within the window are
+// counted instead of repeated; the next emitted line reports the count. The
+// identity never includes attacker-chosen values such as Host, Origin or token
+// hints. On top of that, at most maxLinesPerWindow lines are written per
+// window; the rest are dropped and reported as one log_suppressed line.
+export function createSecurityLog({
+  write = (line) => process.stderr.write(`${line}\n`), now = Date.now, windowMs = 60_000, maxKeys = 1000, maxLinesPerWindow = 100,
+} = {}) {
   const recent = new Map();
+  let windowStart = null;
+  let emitted = 0;
+  let dropped = 0;
+  const emit = (at, fields) => {
+    const clean = Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, sanitizeLogValue(value)]));
+    write(JSON.stringify({ time: new Date(at).toISOString(), ...clean }));
+  };
   return function log(fields) {
-    const { cf_ray: _ray, ...identity } = fields;
-    const key = JSON.stringify(identity);
     const at = now();
+    if (windowStart === null || at - windowStart >= windowMs) {
+      if (dropped) emit(at, { event: "log_suppressed", dropped });
+      windowStart = at;
+      emitted = 0;
+      dropped = 0;
+    }
+    const key = [fields.event, fields.reason, fields.client, fields.status].map((part) => String(part ?? "")).join("|");
     const seen = recent.get(key);
     if (seen && at - seen.at < windowMs) { seen.suppressed += 1; return; }
+    if (emitted >= maxLinesPerWindow) { dropped += 1; return; }
+    emitted += 1;
     recent.delete(key);
     while (recent.size >= maxKeys) recent.delete(recent.keys().next().value);
     recent.set(key, { at, suppressed: 0 });
-    write(JSON.stringify({ time: new Date(at).toISOString(), ...fields, ...(seen?.suppressed ? { repeated: seen.suppressed } : {}) }));
+    emit(at, { ...fields, ...(seen?.suppressed ? { repeated: seen.suppressed } : {}) });
   };
 }
 
@@ -119,41 +201,63 @@ export function cfRay(req) {
 
 export function createRequestGuard({ auth, port, throttle, log = () => {} }) {
   const withPort = (name) => (port === 80 ? [name, `${name}:80`] : [`${name}:${port}`]);
-  const hosts = new Set(LOOPBACK_HOSTNAMES.flatMap(withPort));
+  const loopbackHosts = new Set(LOOPBACK_HOSTNAMES.flatMap(withPort));
+  const publicHosts = new Set();
   const origins = new Set(LOOPBACK_HOSTNAMES.flatMap((name) => withPort(name).map((host) => `http://${host}`)));
   if (auth.mode === "oauth") {
     const publicUrl = new URL(auth.publicUrl);
-    hosts.add(publicUrl.host);
+    publicHosts.add(publicUrl.host);
+    // URL drops a default port, so also accept it spelled out (host:443).
+    if (!publicUrl.port) publicHosts.add(`${publicUrl.hostname}:${DEFAULT_PORTS[publicUrl.protocol]}`);
     origins.add(publicUrl.origin);
   }
-  const reject = (status, reason, headers = {}, details = null) => {
-    if (details) log({ event: "request_rejected", status, reason, ...details });
-    return { ok: false, status, reason, headers };
+  const hosts = new Set([...loopbackHosts, ...publicHosts]);
+
+  const limited = (req, client, retryAfter) => {
+    log({ event: "request_rejected", status: 429, reason: "rate_limited", cf_ray: cfRay(req), client });
+    return { ok: false, status: 429, reason: "rate_limited", headers: { "retry-after": String(retryAfter) } };
+  };
+  // Rejections driven by attacker-chosen headers spend a throttle token before
+  // they are logged, so a flood is answered with 429 and logs are bounded.
+  const deny = (req, client, status, reason, details = {}) => {
+    const taken = throttle.take(client);
+    if (!taken.ok) return limited(req, client, taken.retryAfter);
+    log({ event: "request_rejected", status, reason, cf_ray: cfRay(req), client, ...details });
+    return { ok: false, status, reason, headers: {} };
   };
 
   return {
     hosts, origins,
     check(req) {
       const route = req.url === "/mcp" ? "mcp" : (auth.resourceMetadata && METADATA_PATHS.has(req.url) ? "metadata" : null);
-      if (!route) return reject(404, "path_not_found");
+      if (!route) return { ok: false, status: 404, reason: "path_not_found", headers: {} };
+      const socketClient = clientKey(req, false);
+      if (SINGLE_HEADERS.some((name) => headerValues(req, name).length > 1)) {
+        return deny(req, socketClient, 400, "duplicate_header");
+      }
       const host = String(req.headers.host || "").toLowerCase();
       if (!hosts.has(host)) {
-        return reject(403, "host_not_allowed", {}, { host: headerText(req.headers.host, 100) ?? null, cf_ray: cfRay(req), client: clientKey(req) });
+        return deny(req, socketClient, 403, "host_not_allowed", { host: headerText(req.headers.host, 100) ?? null });
       }
-      if (auth.mode !== "oauth" && PROXY_HEADERS.some((name) => req.headers[name] !== undefined)) {
-        return reject(403, "proxied_request", {}, { cf_ray: cfRay(req), client: clientKey(req) });
+      let client = socketClient;
+      if (loopbackHosts.has(host)) {
+        if (PROXY_HEADERS.some((name) => req.headers[name] !== undefined)) return deny(req, socketClient, 403, "proxied_request");
+      } else if (isLoopback(canonicalIp(req.socket?.remoteAddress))) {
+        // Public Host from a loopback peer: this came through the tunnel, which
+        // must name the real client. Without it every client would share the
+        // tunnel's bucket, so fail closed.
+        const forwarded = forwardedClient(req);
+        if (!forwarded) return deny(req, socketClient, 403, "proxy_client_ip_missing");
+        client = addressKey(forwarded);
       }
       const origin = req.headers.origin;
       if (origin !== undefined && !origins.has(String(origin).toLowerCase())) {
-        return reject(403, "origin_not_allowed", {}, { origin: headerText(origin, 100), cf_ray: cfRay(req), client: clientKey(req) });
+        return deny(req, client, 403, "origin_not_allowed", { origin: headerText(origin, 100) });
       }
       const method = route === "mcp" ? "POST" : "GET";
-      if (req.method !== method) return reject(405, "method_not_allowed", { allow: method });
-      const client = clientKey(req);
+      if (req.method !== method) return { ok: false, status: 405, reason: "method_not_allowed", headers: { allow: method } };
       const taken = throttle.take(client);
-      if (!taken.ok) {
-        return reject(429, "rate_limited", { "retry-after": String(taken.retryAfter) }, { cf_ray: cfRay(req), client });
-      }
+      if (!taken.ok) return limited(req, client, taken.retryAfter);
       return { ok: true, route, client };
     },
   };

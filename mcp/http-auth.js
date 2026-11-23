@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, decodeJwt, decodeProtectedHeader, jwtVerify } from "jose";
-import { bearerToken, safeEqual } from "../lib/auth.js";
+import { safeEqual } from "../lib/auth.js";
 
 const DEFAULT_SCOPE = "wpbridge:access";
 // Asymmetric JWS algorithms only. "none" and HS* (shared-secret) are refused:
@@ -14,6 +14,7 @@ export function parseAlgorithms(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return ["RS256"];
   const list = [...new Set(raw.split(",").map((item) => item.trim()).filter(Boolean))];
+  if (!list.length) throw new Error("WPBRIDGE_MCP_OAUTH_ALGORITHMS lists no algorithms; leave it unset for RS256.");
   for (const alg of list) {
     if (!ASYMMETRIC_ALGORITHMS.has(alg)) {
       throw new Error(`WPBRIDGE_MCP_OAUTH_ALGORITHMS accepts only asymmetric JWS algorithms (for example RS256); "${alg.slice(0, 20)}" is refused.`);
@@ -44,6 +45,50 @@ function grantedScopes(value) {
   return typeof value === "string" ? value.split(/\s+/) : [];
 }
 
+// RFC 6750 section 3.1: no credentials or another scheme is a plain challenge;
+// a Bearer attempt that is not exactly one token is invalid_request (400).
+// lib/auth.js bearerToken() stays as is for the bridge. Each regex is anchored
+// with disjoint classes, so matching stays linear on hostile headers.
+export function parseAuthorization(header) {
+  const text = typeof header === "string" ? header : "";
+  if (!text.trim()) return { kind: "absent" };
+  if (!/^Bearer(?:\s|$)/i.test(text)) return { kind: "other_scheme" };
+  const token = text.match(/^Bearer\s+(\S+)\s*$/i)?.[1];
+  return token ? { kind: "bearer", token } : { kind: "malformed" };
+}
+
+export const OAUTH_SETTINGS = [
+  "WPBRIDGE_MCP_OAUTH_ISSUER", "WPBRIDGE_MCP_OAUTH_AUDIENCE", "WPBRIDGE_MCP_OAUTH_SUBJECT",
+  "WPBRIDGE_MCP_OAUTH_JWKS_URL", "WPBRIDGE_MCP_PUBLIC_URL",
+];
+const OPTIONAL_OAUTH_SETTINGS = ["WPBRIDGE_MCP_OAUTH_SCOPE", "WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM", "WPBRIDGE_MCP_OAUTH_ALGORITHMS"];
+export const LOCAL_TOKEN_HTTP = "WPBRIDGE_MCP_LOCAL_TOKEN_HTTP";
+export const LOCAL_TOKEN_WARNING = "WARNING: HTTP MCP is running in local-token mode. Never route this port through a tunnel or reverse proxy; the loopback Host and proxy-header checks reduce that risk but cannot remove it. Use OAuth for anything remote.";
+
+const isSet = (value) => value !== undefined && value !== null && String(value).trim() !== "";
+
+// HTTP is OAuth-only unless the operator explicitly opts in to the static local
+// token. Header checks cannot prove that a loopback peer is not a tunnel, so
+// the static token must be a deliberate, loopback-only choice. A partial OAuth
+// setup, or OAuth together with the opt-in, refuses to start rather than
+// falling back to the weaker mode.
+export function httpAuthMode(env) {
+  const oauthSet = OAUTH_SETTINGS.filter((name) => isSet(env[name]));
+  const optionalSet = OPTIONAL_OAUTH_SETTINGS.filter((name) => isSet(env[name]));
+  const optIn = env[LOCAL_TOKEN_HTTP];
+  if (oauthSet.length || optionalSet.length) {
+    if (isSet(optIn)) throw new Error(`${LOCAL_TOKEN_HTTP} cannot be combined with OAuth settings; remove one of them.`);
+    const missing = OAUTH_SETTINGS.filter((name) => !oauthSet.includes(name));
+    if (missing.length) throw new Error(`Incomplete OAuth configuration; also set ${missing.join(", ")}.`);
+    return "oauth";
+  }
+  if (isSet(optIn) && optIn !== "1") throw new Error(`${LOCAL_TOKEN_HTTP} must be exactly 1 to enable local-token HTTP.`);
+  if (optIn !== "1") {
+    throw new Error(`HTTP MCP requires OAuth (see MCP-SETUP.md section 4). For loopback-only local testing, set ${LOCAL_TOKEN_HTTP}=1 and WPBRIDGE_MCP_TOKEN; never route that port through a tunnel or proxy.`);
+  }
+  return "local-token";
+}
+
 function clip(value, max = 200) {
   return typeof value === "string" ? value.slice(0, max) : undefined;
 }
@@ -71,8 +116,9 @@ function joseReason(error) {
 }
 
 export function createHttpAuth(env = process.env, { jwks: suppliedJwks } = {}) {
+  const mode = httpAuthMode(env);
   const issuer = String(env.WPBRIDGE_MCP_OAUTH_ISSUER || "");
-  if (issuer) {
+  if (mode === "oauth") {
     const audience = env.WPBRIDGE_MCP_OAUTH_AUDIENCE;
     const subject = env.WPBRIDGE_MCP_OAUTH_SUBJECT;
     const publicUrl = env.WPBRIDGE_MCP_PUBLIC_URL;
@@ -109,15 +155,17 @@ export function createHttpAuth(env = process.env, { jwks: suppliedJwks } = {}) {
     return {
       mode: "oauth",
       publicUrl: resource.toString(),
-      securitySchemes: [scope ? { type: "oauth2", scopes: [scope] } : { type: "oauth2" }],
+      securitySchemes: [{ type: "oauth2", scopes: scope ? [scope] : [] }],
       resourceMetadata: {
         resource: resource.toString(), authorization_servers: [issuer],
         bearer_methods_supported: ["header"], ...(scope ? { scopes_supported: [scope] } : {}),
       },
       challenge: challenge(null),
       async authorize(header) {
-        const token = bearerToken(header);
-        if (!token) return fail(401, null, header ? "not_bearer" : "no_token");
+        const parsed = parseAuthorization(header);
+        if (parsed.kind === "malformed") return fail(400, "invalid_request", "malformed_bearer");
+        if (parsed.kind !== "bearer") return fail(401, null, parsed.kind === "absent" ? "no_token" : "not_bearer");
+        const { token } = parsed;
         let payload;
         try {
           ({ payload } = await jwtVerify(token, jwks, {
@@ -140,9 +188,14 @@ export function createHttpAuth(env = process.env, { jwks: suppliedJwks } = {}) {
     mode: "local-token", publicUrl: null, securitySchemes: null, resourceMetadata: null, challenge: "Bearer",
     // The static token is never decoded or logged; failures get a plain challenge.
     authorize: async (header) => {
-      const presented = bearerToken(header);
+      const parsed = parseAuthorization(header);
+      if (parsed.kind === "malformed") {
+        return { ok: false, status: 400, error: "invalid_request", reason: "malformed_bearer", wwwAuthenticate: 'Bearer error="invalid_request"' };
+      }
+      const presented = parsed.kind === "bearer" ? parsed.token : "";
       if (safeEqual(presented, token)) return { ok: true };
-      return { ok: false, status: 401, error: null, reason: presented ? "token_mismatch" : "no_token", wwwAuthenticate: "Bearer" };
+      const reason = presented ? "token_mismatch" : (parsed.kind === "absent" ? "no_token" : "not_bearer");
+      return { ok: false, status: 401, error: null, reason, wwwAuthenticate: "Bearer" };
     },
   };
 }

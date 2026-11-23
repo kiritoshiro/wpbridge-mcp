@@ -14,6 +14,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const key = "a".repeat(64);
 const token = "m".repeat(64);
+// Explicitly empty, so a developer's mcp/.env cannot switch the mode under test.
+const noOAuth = Object.fromEntries(["WPBRIDGE_MCP_OAUTH_ISSUER", "WPBRIDGE_MCP_OAUTH_AUDIENCE", "WPBRIDGE_MCP_OAUTH_SUBJECT",
+  "WPBRIDGE_MCP_OAUTH_JWKS_URL", "WPBRIDGE_MCP_PUBLIC_URL", "WPBRIDGE_MCP_OAUTH_SCOPE", "WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM",
+  "WPBRIDGE_MCP_OAUTH_ALGORITHMS"].map((name) => [name, ""]));
 
 function registry(dir, bridgePort) {
   const file = path.join(dir, "sites.json");
@@ -126,8 +130,8 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
   let child = null;
   try {
     let port;
-    ({ child, port } = await startHttpServer({ ...process.env, WPBRIDGE_MCP_SITES_FILE: sitesFile, SITE_KEY: key,
-      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_UPLOAD_DIR: temp }));
+    ({ child, port } = await startHttpServer({ ...process.env, ...noOAuth, WPBRIDGE_MCP_SITES_FILE: sitesFile, SITE_KEY: key,
+      WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "1", WPBRIDGE_MCP_UPLOAD_DIR: temp }));
     const url = `http://127.0.0.1:${port}/mcp`;
     const unauthorized = await fetch(url, { method: "POST", body: "{}" });
     assert.equal(unauthorized.status, 401);
@@ -152,6 +156,34 @@ test("loopback HTTP MCP requires a token and routes a real client request", asyn
     await client.close();
     if (child) await stop(child);
     await new Promise((resolve) => bridge.close(resolve));
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test("HTTP MCP refuses local-token mode without the opt-in and warns when it is enabled", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "wpbridge-http-mode-"));
+  try {
+    const env = { ...process.env, ...noOAuth, WPBRIDGE_MCP_SITES_FILE: registry(temp, 1), SITE_KEY: key, WPBRIDGE_MCP_TOKEN: token,
+      WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "", WPBRIDGE_MCP_PORT: "1" };
+    const run = (extra) => spawnSync(process.execPath, [path.join(root, "mcp", "server.js"), "--http"],
+      { cwd: root, env: { ...env, ...extra }, encoding: "utf8", timeout: 10_000 });
+    const refused = run({});
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /requires OAuth/);
+    const mixed = run({ WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "1", WPBRIDGE_MCP_OAUTH_ISSUER: "https://issuer.example/" });
+    assert.equal(mixed.status, 1);
+    assert.match(mixed.stderr, /cannot be combined/);
+    // listen() is replaced so the check needs no free port: the warning is printed before it.
+    const warned = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      process.env.WPBRIDGE_MCP_LOCAL_TOKEN_HTTP = "1";
+      const { main } = await import(${JSON.stringify(new URL("../mcp/server.js", import.meta.url).href)});
+      const http = await import("node:http");
+      http.Server.prototype.listen = function () { process.exit(0); };
+      await main(["--http"]);
+    `], { cwd: root, env, encoding: "utf8", timeout: 10_000, input: "" });
+    assert.equal(warned.status, 0, warned.stderr);
+    assert.match(warned.stderr, /WARNING: HTTP MCP is running in local-token mode/);
+  } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });

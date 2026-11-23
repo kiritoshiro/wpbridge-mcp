@@ -1,7 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHttpAuth, parseAlgorithms, unverifiedTokenHints } from "../mcp/http-auth.js";
+import { createHttpAuth, parseAlgorithms, parseAuthorization, unverifiedTokenHints } from "../mcp/http-auth.js";
 
 const env = {
   WPBRIDGE_MCP_OAUTH_ISSUER: "https://issuer.example/",
@@ -32,15 +32,71 @@ async function signed(claims, { key, alg = "RS256", kid = "test-key", iss = env.
 
 const owner = { sub: "owner-123", scope: "wpbridge:access" };
 
+const optIn = { WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "1" };
+
 test("local HTTP MCP mode requires a strong token and checks it", async () => {
-  assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: "short" }), /32 characters/);
+  assert.throws(() => createHttpAuth({ ...optIn, WPBRIDGE_MCP_TOKEN: "short" }), /32 characters/);
   const token = "t".repeat(64);
-  const auth = createHttpAuth({ WPBRIDGE_MCP_TOKEN: token });
+  const auth = createHttpAuth({ ...optIn, WPBRIDGE_MCP_TOKEN: token });
   assert.equal(auth.mode, "local-token");
   assert.deepEqual(await auth.authorize(`Bearer ${token}`), { ok: true });
   const wrong = await auth.authorize("Bearer incorrect");
   assert.deepEqual(wrong, { ok: false, status: 401, error: null, reason: "token_mismatch", wwwAuthenticate: "Bearer" });
   assert.equal((await auth.authorize(undefined)).reason, "no_token");
+  assert.equal((await auth.authorize(`Basic ${token}`)).reason, "not_bearer");
+  assert.deepEqual(await auth.authorize(`Bearer ${token} extra`), {
+    ok: false, status: 400, error: "invalid_request", reason: "malformed_bearer", wwwAuthenticate: 'Bearer error="invalid_request"',
+  });
+});
+
+test("HTTP is OAuth-only unless local-token HTTP is explicitly enabled", () => {
+  const token = "t".repeat(64);
+  assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token }), /requires OAuth.*WPBRIDGE_MCP_LOCAL_TOKEN_HTTP=1/);
+  assert.throws(() => createHttpAuth({}), /requires OAuth/);
+  for (const value of ["true", "yes", "0", " 1", "1 "]) {
+    assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: value }), /exactly 1/, value);
+  }
+  assert.equal(createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "1" }).mode, "local-token");
+  // An empty value, as an unfilled .env line leaves it, is the same as unset.
+  assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "" }), /requires OAuth/);
+});
+
+test("partial or mixed OAuth configuration refuses to start", () => {
+  const token = "t".repeat(64);
+  for (const name of Object.keys(env)) {
+    const partial = { ...env, WPBRIDGE_MCP_TOKEN: token, ...optIn };
+    delete partial.WPBRIDGE_MCP_LOCAL_TOKEN_HTTP;
+    partial[name] = "  ";
+    assert.throws(() => createHttpAuth(partial), new RegExp(`Incomplete OAuth configuration; also set ${name}`), name);
+  }
+  for (const name of Object.keys(env)) {
+    assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, ...optIn, [name]: env[name] }), /cannot be combined/, name);
+    assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, [name]: env[name] }), /Incomplete OAuth/, name);
+  }
+  for (const [name, value] of [["WPBRIDGE_MCP_OAUTH_SCOPE", "mcp:use"], ["WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM", "scp"], ["WPBRIDGE_MCP_OAUTH_ALGORITHMS", "ES256"]]) {
+    assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, ...optIn, [name]: value }), /cannot be combined/, name);
+    assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: token, [name]: value }), /Incomplete OAuth/, name);
+  }
+  assert.throws(() => createHttpAuth({ ...env, ...optIn }), /cannot be combined/);
+  // A complete OAuth setup ignores a leftover local token: it is never accepted.
+  assert.equal(createHttpAuth({ ...env, WPBRIDGE_MCP_TOKEN: token }).mode, "oauth");
+});
+
+test("Authorization parsing separates absent, other schemes and malformed Bearer", () => {
+  assert.deepEqual(parseAuthorization(undefined), { kind: "absent" });
+  assert.deepEqual(parseAuthorization(""), { kind: "absent" });
+  assert.deepEqual(parseAuthorization("Basic abc"), { kind: "other_scheme" });
+  assert.deepEqual(parseAuthorization("Bearerx abc"), { kind: "other_scheme" });
+  assert.deepEqual(parseAuthorization("Bearer abc"), { kind: "bearer", token: "abc" });
+  assert.deepEqual(parseAuthorization("bearer  abc "), { kind: "bearer", token: "abc" });
+  for (const value of ["Bearer", "Bearer ", "Bearer token extra", "Bearer a	b"]) {
+    assert.deepEqual(parseAuthorization(value), { kind: "malformed" }, JSON.stringify(value));
+  }
+  // Linear on hostile input.
+  const started = Date.now();
+  parseAuthorization(`Bearer ${"a ".repeat(50_000)}`);
+  parseAuthorization(`Bearer ${" ".repeat(100_000)}x y`);
+  assert.ok(Date.now() - started < 500);
 });
 
 test("OAuth mode requires a fixed owner and HTTPS metadata", async () => {
@@ -58,7 +114,15 @@ test("OAuth mode requires a fixed owner and HTTPS metadata", async () => {
   assert.equal(none.reason, "no_token");
   assert.equal(none.wwwAuthenticate, `Bearer resource_metadata="${metadata}", scope="wpbridge:access"`);
   assert.equal((await auth.authorize("Basic abc")).reason, "not_bearer");
-  assert.throws(() => createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_SUBJECT: "" }), /exact owner subject/);
+  assert.equal((await auth.authorize("Basic abc")).status, 401);
+  for (const header of ["Bearer", "Bearer token extra"]) {
+    const malformed = await auth.authorize(header);
+    assert.equal(malformed.status, 400, header);
+    assert.equal(malformed.reason, "malformed_bearer", header);
+    assert.equal(malformed.wwwAuthenticate, `Bearer error="invalid_request", resource_metadata="${metadata}", scope="wpbridge:access"`);
+  }
+  assert.throws(() => createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_SUBJECT: "" }), /also set WPBRIDGE_MCP_OAUTH_SUBJECT/);
+  assert.throws(() => createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_ISSUER: "http://issuer.example/" }), /exact owner subject/);
 });
 
 test("OAuth accepts only a signed token for this resource, owner, and scope", async () => {
@@ -114,6 +178,10 @@ test("OAuth algorithms are pinned and refuse none and HS*", async () => {
   for (const bad of ["none", "HS256", "RS256,HS512", "rs256", "foo"]) {
     assert.throws(() => createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_ALGORITHMS: bad }), /asymmetric/, bad);
   }
+  for (const empty of [",", ",,,", " , , "]) {
+    assert.throws(() => parseAlgorithms(empty), /lists no algorithms/, empty);
+    assert.throws(() => createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_ALGORITHMS: empty }), /lists no algorithms/, empty);
+  }
   const { jwks, ec } = await keys;
   const auth = createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_ALGORITHMS: "RS256,ES256" }, { jwks });
   assert.equal((await auth.authorize(`Bearer ${await signed(owner, { key: ec.privateKey, alg: "ES256", kid: "ec-key" })}`)).ok, true);
@@ -137,7 +205,7 @@ test("OAuth scope is configurable, can be disabled, and can be read from scp", a
 
   const disabled = createHttpAuth({ ...env, WPBRIDGE_MCP_OAUTH_SCOPE: "" }, { jwks });
   assert.equal("scopes_supported" in disabled.resourceMetadata, false);
-  assert.deepEqual(disabled.securitySchemes, [{ type: "oauth2" }]);
+  assert.deepEqual(disabled.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   assert.equal(disabled.challenge, `Bearer resource_metadata="${metadata}"`);
   assert.equal((await disabled.authorize(`Bearer ${await signed({ sub: "owner-123" })}`)).ok, true);
   const otherOwner = await disabled.authorize(`Bearer ${await signed({ sub: "someone-else" })}`);

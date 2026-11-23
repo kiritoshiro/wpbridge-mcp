@@ -2,8 +2,11 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import net from "node:net";
 import { createHttpAuth } from "../mcp/http-auth.js";
-import { clientKey, createSecurityLog, createThrottle, parseRateLimit } from "../mcp/http-guard.js";
+import {
+  canonicalIp, clientKey, createRequestGuard, createSecurityLog, createThrottle, parseRateLimit, sanitizeLogValue,
+} from "../mcp/http-guard.js";
 import { createHttpHandler } from "../mcp/server.js";
 import { createGateway } from "../mcp/gateway.js";
 
@@ -15,6 +18,8 @@ const oauthEnv = {
   WPBRIDGE_MCP_PUBLIC_URL: "https://mcp.example.com/mcp",
 };
 const localToken = "m".repeat(64);
+// What a Cloudflare tunnel delivers: the public Host and the real client IP.
+const viaTunnel = { host: "mcp.example.com", "cf-connecting-ip": "203.0.113.10" };
 const metadataUrl = "https://mcp.example.com/.well-known/oauth-protected-resource";
 const initialize = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {
   protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "guard-test", version: "1.0.0" },
@@ -39,7 +44,7 @@ function manualClock(start = 1_000_000) {
 // Runs the real handler on a real loopback server. authorize() is counted so
 // tests can prove that cheap rejects never reach authentication.
 async function withServer({ mode = "oauth", env = {}, throttle, run }) {
-  const base = mode === "oauth" ? { ...oauthEnv, ...env } : { WPBRIDGE_MCP_TOKEN: localToken, ...env };
+  const base = mode === "oauth" ? { ...oauthEnv, ...env } : { WPBRIDGE_MCP_TOKEN: localToken, WPBRIDGE_MCP_LOCAL_TOKEN_HTTP: "1", ...env };
   const realAuth = createHttpAuth(base, mode === "oauth" ? { jwks: (await keys).jwks } : {});
   const counter = { calls: 0 };
   const auth = { ...realAuth, authorize: async (header) => { counter.calls += 1; return realAuth.authorize(header); } };
@@ -169,10 +174,15 @@ test("Host must be the public host or loopback on the configured port", async ()
     assert.equal(rejected.event, "request_rejected");
     assert.equal(rejected.reason, "host_not_allowed");
     assert.equal(rejected.host, "evil.example");
-    for (const host of ["mcp.example.com", "MCP.example.com", `127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]) {
+    for (const host of ["mcp.example.com", "MCP.example.com", "mcp.example.com:443"]) {
+      assert.equal((await request({ headers: { ...viaTunnel, host } })).status, 401, host);
+    }
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]) {
       assert.equal((await request({ headers: { host } })).status, 401, host);
     }
-    assert.equal(counter.calls, 5);
+    assert.equal(counter.calls, 6);
+    assert.equal((await request({ headers: { ...viaTunnel, host: "mcp.example.com:80" } })).status, 403,
+      "only the scheme's default port is equivalent");
   } });
 });
 
@@ -235,8 +245,8 @@ test("throttling answers 429 with Retry-After before auth, per client, and recov
     assert.equal(counter.calls, 2);
     assert.equal((await request({ method: "GET", path: "/.well-known/oauth-protected-resource" })).status, 429,
       "metadata shares the bucket");
-    // The test client is a loopback peer, so Cf-Connecting-IP selects the bucket.
-    assert.equal((await request({ headers: { "cf-connecting-ip": "203.0.113.9" } })).status, 401);
+    // The test client is a loopback peer, so on the public host Cf-Connecting-IP selects the bucket.
+    assert.equal((await request({ headers: { ...viaTunnel, "cf-connecting-ip": "203.0.113.9" } })).status, 401);
     clock.at += 1000;
     assert.equal((await request({})).status, 401);
     assert.equal(counter.calls, 4);
@@ -247,7 +257,7 @@ test("throttling answers 429 with Retry-After before auth, per client, and recov
 test("protected-resource metadata is served at both well-known paths without auth", async () => {
   await withServer({ run: async ({ request, counter }) => {
     for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
-      const response = await request({ method: "GET", path, headers: { host: "mcp.example.com" } });
+      const response = await request({ method: "GET", path, headers: viaTunnel });
       assert.equal(response.status, 200, path);
       assert.equal(response.headers["content-type"], "application/json");
       assert.deepEqual(JSON.parse(response.body), {
@@ -283,7 +293,7 @@ test("HTTP challenges follow RFC 6750 and a valid owner token reaches MCP", asyn
     const otherUser = await request({ headers: { authorization: `Bearer ${await signed({ sub: "someone-else", scope: "wpbridge:access" })}` } });
     assert.equal(otherUser.status, 403);
     const ok = await request({ headers: { authorization: `Bearer ${await signed({ sub: "owner-123", scope: "wpbridge:access" })}`,
-      accept: "application/json, text/event-stream", "content-type": "application/json", host: "mcp.example.com" }, body: initialize });
+      accept: "application/json, text/event-stream", "content-type": "application/json", ...viaTunnel }, body: initialize });
     assert.equal(ok.status, 200);
     assert.match(ok.body, /"serverInfo"/);
   } });
@@ -318,4 +328,236 @@ test("auth failure logs carry reasons but never the token, Authorization header 
     assert.equal(first.aud, "https://another.example/mcp");
     assert.ok(lines.every((line) => !line.includes("\n")));
   } });
+});
+
+// Sends raw bytes so tests can produce what http.request refuses to send
+// (duplicate Host, a declared body that never arrives). Resolves when the
+// server closes the socket or after timeoutMs.
+function rawRequest(port, text, { timeoutMs = 3000, destroyAfterMs = null } = {}) {
+  return new Promise((resolve) => {
+    const socket = net.connect(port, "127.0.0.1");
+    const started = Date.now();
+    let data = "";
+    const timer = setTimeout(() => { socket.destroy(); resolve({ data, closed: false, ms: Date.now() - started }); }, timeoutMs);
+    socket.on("connect", () => {
+      socket.write(text);
+      if (destroyAfterMs !== null) setTimeout(() => socket.destroy(), destroyAfterMs);
+    });
+    socket.on("data", (chunk) => { data += chunk; });
+    socket.on("error", () => {});
+    socket.on("close", () => { clearTimeout(timer); resolve({ data, closed: true, ms: Date.now() - started }); });
+  });
+}
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const char = (code) => String.fromCharCode(code);
+
+test("client keys canonicalise IPv6 to the /64 and treat IPv4-mapped addresses as IPv4", () => {
+  const key = (ip) => clientKey({ socket: { remoteAddress: "127.0.0.1" }, headers: { "cf-connecting-ip": ip } });
+  assert.notEqual(key("2001::abcd:1:2:3:4:5"), key("2001::beef:9:8:7:6:5"), "distinct /64s");
+  assert.equal(key("2001::abcd:1:2:3:4:5"), "2001:0:abcd:1::/64");
+  assert.equal(key("2001::beef:9:8:7:6:5"), "2001:0:beef:9::/64");
+  for (const same of ["2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001", "2001:DB8:0:0::1", "[2001:db8::1]", "2001:db8:0:0:ffff::"]) {
+    assert.equal(key(same), "2001:db8:0:0::/64", same);
+  }
+  assert.equal(key("2001:db8:1:2::"), "2001:db8:1:2::/64", ":: at the end");
+  assert.equal(key("::2:3:4:5:6:7:8"), "0:2:3:4::/64", ":: at the start");
+  assert.equal(key("2001:db8:1::5:6:7:8"), "2001:db8:1:0::/64", ":: in the middle");
+  assert.equal(key("64:ff9b::192.0.2.1"), "64:ff9b:0:0::/64", "IPv4 tail");
+  assert.equal(key("2001:db8:1:2:3:4:192.0.2.1"), "2001:db8:1:2::/64", "full IPv4 tail");
+  for (const mapped of ["::ffff:203.0.113.7", "::FFFF:cb00:7107", "0:0:0:0:0:ffff:203.0.113.7"]) {
+    assert.equal(key(mapped), "203.0.113.7", mapped);
+  }
+  assert.deepEqual(canonicalIp("fe80::1%eth0"), { family: 6, groups: [0xfe80, 0, 0, 0, 0, 0, 0, 1] });
+  assert.equal(canonicalIp("not an ip"), null);
+  // Loopback in any spelling is the trusted tunnel peer.
+  for (const peer of ["0:0:0:0:0:0:0:1", "::ffff:7f00:1", "::ffff:127.0.0.2"]) {
+    assert.equal(clientKey({ socket: { remoteAddress: peer }, headers: { "cf-connecting-ip": "198.51.100.1" } }), "198.51.100.1", peer);
+  }
+  assert.equal(clientKey({ socket: { remoteAddress: "0:0:0:0:0:0:0:1" }, headers: {} }), "::1");
+  assert.equal(clientKey({ socket: { remoteAddress: "127.0.0.1" }, headers: { "cf-connecting-ip": "198.51.100.1" } }, false), "127.0.0.1");
+});
+
+test("logged strings have control and line-separator characters escaped", () => {
+  const codes = [0x0d, 0x0a, 0x00, 0x85, 0x2028, 0x2029, 0x9b, 0x202e];
+  const nasty = `a${codes.map(char).join("")}b`;
+  const lines = [];
+  const log = createSecurityLog({ write: (line) => lines.push(line) });
+  log({ event: "auth_failed", reason: "x", kid: nasty, aud: [nasty], status: 401 });
+  assert.equal(lines.length, 1);
+  const unsafe = (c) => c < 0x20 || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029 || c === 0x202e;
+  assert.ok(![...lines[0]].some((c) => unsafe(c.charCodeAt(0))), "no raw control characters in the line");
+  const parsed = JSON.parse(lines[0]);
+  const escaped = `a${codes.map((code) => `${char(92)}u${code.toString(16).padStart(4, "0")}`).join("")}b`;
+  assert.equal(parsed.kid, escaped);
+  assert.deepEqual(parsed.aud, [escaped]);
+  assert.equal(sanitizeLogValue(42), 42);
+});
+
+function guardFor(throttle, log) {
+  const auth = createHttpAuth(oauthEnv, { jwks: () => { throw new Error("unused"); } });
+  return createRequestGuard({ auth, port: 8790, throttle, log });
+}
+const fakeReq = (headers, remoteAddress = "127.0.0.1") => ({ url: "/mcp", method: "POST", headers, socket: { remoteAddress } });
+
+test("bad Origins from one client are throttled before logging and log a bounded number of lines", () => {
+  const lines = [];
+  const clock = manualClock();
+  const guard = guardFor(createThrottle({ now: clock.now }), createSecurityLog({ write: (line) => lines.push(line), now: clock.now }));
+  const statuses = [];
+  for (let i = 0; i < 1100; i += 1) {
+    statuses.push(guard.check(fakeReq({ ...viaTunnel, origin: `https://evil-${i}.example` })).status);
+  }
+  assert.equal(statuses.filter((status) => status === 403).length, 30, "the default burst");
+  assert.equal(statuses.filter((status) => status === 429).length, 1070);
+  assert.equal(lines.length, 2, "one origin_not_allowed and one rate_limited line");
+  assert.deepEqual(lines.map((line) => JSON.parse(line).reason), ["origin_not_allowed", "rate_limited"]);
+});
+
+test("rejections from many clients are capped by the global log budget", () => {
+  const lines = [];
+  const clock = manualClock();
+  const guard = guardFor(createThrottle({ now: clock.now }), createSecurityLog({ write: (line) => lines.push(line), now: clock.now }));
+  for (let i = 0; i < 1100; i += 1) {
+    const req = fakeReq({ ...viaTunnel, "cf-connecting-ip": `2001:db8:${i.toString(16)}::1`, origin: `https://evil-${i}.example` });
+    assert.equal(guard.check(req).status, 403);
+  }
+  assert.equal(lines.length, 100);
+  clock.at += 60_000;
+  guard.check(fakeReq({ ...viaTunnel, origin: "https://late.example" }));
+  const summary = JSON.parse(lines[100]);
+  assert.deepEqual({ event: summary.event, dropped: summary.dropped }, { event: "log_suppressed", dropped: 1000 });
+  assert.equal(JSON.parse(lines[101]).reason, "origin_not_allowed");
+  assert.equal(lines.length, 102);
+});
+
+test("log dedupe ignores attacker-chosen fields such as Host", () => {
+  const lines = [];
+  const guard = guardFor(createThrottle({ burst: 10_000, perSecond: 1 }), createSecurityLog({ write: (line) => lines.push(line) }));
+  for (let i = 0; i < 50; i += 1) assert.equal(guard.check(fakeReq({ host: `h${i}.example` })).status, 403);
+  assert.equal(lines.length, 1);
+});
+
+test("public-Host requests through the tunnel must carry exactly one valid Cf-Connecting-IP", async () => {
+  await withServer({ run: async ({ request, counter, port, lines }) => {
+    for (const ip of [undefined, "", "not an ip", "203.0.113.7, 203.0.113.8"]) {
+      const response = await request({ headers: { host: "mcp.example.com", "cf-connecting-ip": ip } });
+      assert.equal(response.status, 403, String(ip));
+    }
+    assert.equal(counter.calls, 0);
+    assert.ok(lines.some((line) => JSON.parse(line).reason === "proxy_client_ip_missing"));
+    assert.equal((await request({ headers: viaTunnel })).status, 401);
+    // Local testing on a loopback Host keeps using the socket address...
+    assert.equal((await request({ headers: { host: `localhost:${port}` } })).status, 401);
+    // ...but a loopback Host that came through a proxy is refused.
+    assert.equal((await request({ headers: { host: `localhost:${port}`, "cf-connecting-ip": "203.0.113.7" } })).status, 403);
+    assert.equal(counter.calls, 2);
+  } });
+});
+
+test("duplicate security headers are refused with 400 before auth", async () => {
+  await withServer({ run: async ({ port, counter, lines }) => {
+    const host = `127.0.0.1:${port}`;
+    for (const extra of ["Host: evil.example", `Host: ${host}`, "Authorization: Bearer a", "Origin: https://evil.example",
+      "Cf-Connecting-IP: 203.0.113.7", "Cf-Ray: abc"]) {
+      const first = extra.startsWith("Host") ? "" : `${extra}\r\n`;
+      const text = `POST /mcp HTTP/1.1\r\nHost: ${host}\r\n${first}${extra}\r\nContent-Length: 2\r\n\r\n{}`;
+      const response = await rawRequest(port, text);
+      assert.match(response.data, /^HTTP\/1\.1 400 /, extra);
+      assert.match(response.data, /connection: close/i, extra);
+      assert.equal(response.closed, true, extra);
+    }
+    assert.equal(counter.calls, 0);
+    assert.equal(JSON.parse(lines[0]).reason, "duplicate_header");
+  } });
+});
+
+test("malformed Bearer credentials get 400 invalid_request; absent or other schemes get 401", async () => {
+  await withServer({ run: async ({ request, lines }) => {
+    for (const authorization of ["Bearer", "Bearer token extra"]) {
+      const response = await request({ headers: { authorization } });
+      assert.equal(response.status, 400, authorization);
+      assert.equal(response.headers["www-authenticate"],
+        `Bearer error="invalid_request", resource_metadata="${metadataUrl}", scope="wpbridge:access"`);
+    }
+    const basic = await request({ headers: { authorization: "Basic abc" } });
+    assert.equal(basic.status, 401);
+    assert.equal(basic.headers["www-authenticate"], `Bearer resource_metadata="${metadataUrl}", scope="wpbridge:access"`);
+    const logged = lines.map((line) => JSON.parse(line)).find((entry) => entry.reason === "malformed_bearer");
+    assert.equal(logged.status, 400);
+    assert.ok(!lines.join("\n").includes("token extra"));
+  } });
+});
+
+test("a tunnel that rewrites Host to loopback and strips proxy headers still meets OAuth, never the static token", async () => {
+  const headers = (port) => ({ host: `localhost:${port}`, authorization: `Bearer ${localToken}`,
+    accept: "application/json, text/event-stream", "content-type": "application/json" });
+  // In OAuth mode a leftover WPBRIDGE_MCP_TOKEN is never accepted, whatever the Host.
+  await withServer({ env: { WPBRIDGE_MCP_TOKEN: localToken }, run: async ({ request, port }) => {
+    const response = await request({ headers: headers(port), body: initialize });
+    assert.equal(response.status, 401);
+    assert.match(response.headers["www-authenticate"], /error="invalid_token"/);
+  } });
+  // Header checks alone cannot tell such a tunnel from a local client: this is
+  // why local-token HTTP needs the explicit, loopback-only opt-in.
+  await withServer({ mode: "local-token", run: async ({ request, port }) => {
+    assert.equal((await request({ headers: headers(port), body: initialize })).status, 200);
+  } });
+  assert.throws(() => createHttpAuth({ WPBRIDGE_MCP_TOKEN: localToken }), /requires OAuth/);
+});
+
+test("early responses close the connection", async () => {
+  await withServer({ run: async ({ request }) => {
+    for (const options of [{ path: "/nope" }, { headers: { host: "evil.example" } }, { method: "GET" }, {}]) {
+      const response = await request(options);
+      assert.equal(response.headers.connection, "close", JSON.stringify(options));
+    }
+  } });
+});
+
+test("an unauthenticated request declaring a huge body is answered and its socket closed promptly", async () => {
+  await withServer({ run: async ({ port, counter }) => {
+    const response = await rawRequest(port, `POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 100000000\r\n\r\n`);
+    assert.match(response.data, /^HTTP\/1\.1 401 /);
+    assert.match(response.data, /connection: close/i);
+    assert.equal(response.closed, true, "the server closed the socket without waiting for the body");
+    assert.ok(response.ms < 2000);
+    assert.equal(counter.calls, 1);
+  } });
+});
+
+test("oversized bodies get 413 and the socket is closed", async () => {
+  await withServer({ mode: "local-token", run: async ({ port }) => {
+    const head = `POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${localToken}\r\n`;
+    const declared = await rawRequest(port, `${head}Content-Length: 3000000\r\n\r\n`);
+    assert.match(declared.data, /^HTTP\/1\.1 413 /);
+    assert.equal(declared.closed, true);
+    assert.ok(declared.ms < 2000);
+    const size = 2_100_000;
+    const chunked = await rawRequest(port, `${head}Transfer-Encoding: chunked\r\n\r\n${size.toString(16)}\r\n${"x".repeat(size)}\r\n0\r\n\r\n`);
+    assert.match(chunked.data, /^HTTP\/1\.1 413 /);
+    assert.equal(chunked.closed, true);
+  } });
+});
+
+test("a client that disconnects mid-body does not cause an unhandled rejection", async () => {
+  const problems = [];
+  const onProblem = (error) => problems.push(error);
+  process.on("unhandledRejection", onProblem);
+  process.on("uncaughtException", onProblem);
+  try {
+    await withServer({ mode: "local-token", run: async ({ port, request }) => {
+      const text = `POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${localToken}\r\nContent-Length: 1000\r\n\r\n{"jsonrpc"`;
+      const aborted = await rawRequest(port, text, { destroyAfterMs: 100 });
+      assert.equal(aborted.data, "", "nothing was answered before the disconnect");
+      await pause(100);
+      const ok = await request({ headers: { authorization: `Bearer ${localToken}`, accept: "application/json, text/event-stream",
+        "content-type": "application/json" }, body: initialize });
+      assert.equal(ok.status, 200, "the server keeps serving");
+    } });
+  } finally {
+    process.off("unhandledRejection", onProblem);
+    process.off("uncaughtException", onProblem);
+  }
+  assert.deepEqual(problems, []);
 });
