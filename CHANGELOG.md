@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Security: harden the HTTP MCP transport for remote HTTPS + OAuth use.
+  Requests are checked in this order before any token work: path (only `/mcp`
+  and the protected-resource metadata paths), Host (the public URL's host or
+  loopback on the configured port), Origin (absent, the public origin or a
+  loopback origin; otherwise 403), method (405 without running auth), then a
+  bounded per-client token bucket (429 with `Retry-After`; client is
+  `Cf-Connecting-IP` from a loopback peer, otherwise the peer address).
+  Local-token mode accepts loopback Hosts only and refuses proxied requests,
+  so a tunnel cannot expose the static token. New optional settings:
+  `WPBRIDGE_MCP_RATE_LIMIT_BURST` (30) and `WPBRIDGE_MCP_RATE_LIMIT_PER_SECOND` (5).
+- Security: OAuth verification pins the JWS algorithms
+  (`WPBRIDGE_MCP_OAUTH_ALGORITHMS`, default `RS256`; `none` and `HS*` are
+  refused) and allows 30 seconds of clock drift. Invalid tokens get 401 with
+  `error="invalid_token"`; a valid token for another subject or without the
+  scope now gets 403 with `error="insufficient_scope"` instead of 401. A request
+  without a token gets a challenge without an error code (RFC 6750).
+- OAuth: the required scope is configurable (`WPBRIDGE_MCP_OAUTH_SCOPE`, default
+  `wpbridge:access`; empty turns the requirement and its advertisement off, for
+  providers without custom scopes), and `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM=scp`
+  reads it from an `scp` claim. Protected-resource metadata is also served at
+  `/.well-known/oauth-protected-resource/mcp`.
+- HTTP MCP logs failed authentication and Host, Origin or throttle rejections
+  to stderr as one JSON line with a reason code, `Cf-Ray`, client key and the
+  unverified token `kid`, `iss` and `aud` only; tokens, the `Authorization`
+  header and `sub` are never logged, and identical lines are rate-limited.
+- The `upload_attached_media` description now says it works only with ChatGPT
+  file attachments.
+
 - Security: harden the MEC calendar helper (1.0.2) authorization using the
   `mec-events` post type and MEC taxonomy capability objects. Listings only
   return events the user may read (others' drafts/pending/future need

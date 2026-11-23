@@ -50,24 +50,47 @@ To test the gateway without installing the Codex plugin, run `npm run mcp` for s
 
 In the client, call `list_sites`, then try `wpbridge_contentRead` with a returned `site_id` and `action: listPosts`. Check that an action absent from `allowed_actions` is refused. Before enabling writes, test a draft and its preview/version checks on one site at a time. Installing the plugin by itself does not start the per-site bridge processes.
 
-## 4. Prepare remote ChatGPT access
+## 4. Prepare remote access (HTTPS + OAuth)
 
 Remote access needs two services that this repository does not create: a stable HTTPS address for `/mcp`, and an OAuth 2.1 identity provider. Until both exist, use the local path above and leave OAuth variables unset. Do not point a public tunnel at the old bridge or expose the MCP loopback port directly.
 
-Put a TLS reverse proxy or named HTTPS tunnel in front of the **new** loopback MCP HTTP process. Route only `/mcp` and `/.well-known/oauth-protected-resource` to it. Configure an established identity provider with authorization-code + PKCE S256, authorization-server metadata, a JWKS endpoint, and a client registration method supported by ChatGPT. Its access token must contain the MCP resource as its audience and the `wpbridge:access` scope. Use the exact subject of the owner account that may operate these sites. Set these values in the new checkout's `mcp/.env`:
+The MCP HTTP process always binds to loopback. Put a TLS reverse proxy or named HTTPS tunnel (for example a Cloudflare named tunnel forwarding `https://mcp.example.com` to `http://127.0.0.1:8790`) in front of the **new** MCP HTTP process. Route only `/mcp`, `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp` to it. Configure an established identity provider with authorization-code + PKCE S256, authorization-server metadata, a JWKS endpoint, and a client registration method supported by your clients. Its access token must contain the MCP resource as its audience and, unless you turn it off, the `wpbridge:access` scope. Use the exact subject of the owner account that may operate these sites. Set these values in the new checkout's `mcp/.env`:
 
 ```dotenv
-WPBRIDGE_MCP_OAUTH_ISSUER=https://issuer.example/
+WPBRIDGE_MCP_OAUTH_ISSUER=https://TENANT.eu.auth0.com/
 WPBRIDGE_MCP_OAUTH_AUDIENCE=https://mcp.example.com/mcp
 WPBRIDGE_MCP_OAUTH_SUBJECT=<exact owner subject claim>
-WPBRIDGE_MCP_OAUTH_JWKS_URL=https://issuer.example/jwks.json
+WPBRIDGE_MCP_OAUTH_JWKS_URL=https://TENANT.eu.auth0.com/.well-known/jwks.json
 WPBRIDGE_MCP_PUBLIC_URL=https://mcp.example.com/mcp
 ```
 
-When OAuth is configured, MCP checks the token signature, issuer, audience, expiration, exact owner subject, and scope for every request. It publishes protected-resource metadata at `/.well-known/oauth-protected-resource` and challenges unauthenticated requests. Verify that an unauthenticated POST to `/mcp` returns 401 and a `WWW-Authenticate` header, and that the metadata resource and issuer match the configured HTTPS URLs. Then register the HTTPS `/mcp` URL in ChatGPT developer mode, complete OAuth, and test `list_sites` and a read action before enabling any write class. Follow the [current OpenAI authentication guide](https://developers.openai.com/plugins/build/auth) for the provider's client registration and callback requirements and the [connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt) for ChatGPT testing. Keep the plugin private until the end-to-end connection is verified.
+The issuer must equal the provider's metadata `issuer` and the token `iss` character for character, including any trailing slash. Optional settings:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `WPBRIDGE_MCP_OAUTH_SCOPE` | `wpbridge:access` | Required scope, advertised in metadata, challenges and tool `securitySchemes`. Set it to an empty value for providers without custom scopes; security then rests on issuer, audience, owner subject and expiry. |
+| `WPBRIDGE_MCP_OAUTH_SCOPE_CLAIM` | `scope` | `scp` reads the scope from an `scp` claim (string or array). |
+| `WPBRIDGE_MCP_OAUTH_ALGORITHMS` | `RS256` | Comma-separated accepted JWS algorithms. Only asymmetric algorithms are allowed; `none` and `HS*` are refused at startup. |
+| `WPBRIDGE_MCP_RATE_LIMIT_BURST` | `30` | Requests a client may send at once before throttling. |
+| `WPBRIDGE_MCP_RATE_LIMIT_PER_SECOND` | `5` | Sustained requests per second per client. |
+
+Every request passes these checks in order, and only a request that passes all of them reaches token verification:
+
+1. **Path:** only `/mcp` and the two metadata paths; anything else is 404.
+2. **Host:** the host of `WPBRIDGE_MCP_PUBLIC_URL`, or `127.0.0.1`, `localhost` or `[::1]` with the configured port; anything else is 403. In local-token mode (no OAuth) only loopback hosts are accepted, and requests carrying proxy headers (`Cf-Connecting-IP`, `Cf-Ray`, `X-Forwarded-For`, `X-Forwarded-Host`, `Forwarded`) are refused, so a tunnel can never expose the static token. The proxy must therefore pass the public Host through unchanged.
+3. **Origin:** a request without `Origin` (server-side clients) is allowed; a present `Origin` must be the public URL's origin or a loopback origin on the configured port, otherwise 403.
+4. **Method:** `/mcp` accepts only POST and the metadata paths only GET; others get 405 before any authentication.
+5. **Throttle:** an in-process token bucket per client returns 429 with `Retry-After`. The client is `Cf-Connecting-IP` when the TCP peer is loopback (the tunnel), otherwise the peer address; IPv6 clients share a bucket per /64. Memory is capped at 10,000 clients.
+6. **Token:** signature against the JWKS with the pinned algorithms, exact issuer and audience, a required `exp` (30 seconds of clock tolerance), the exact owner `sub`, and the scope. An invalid, expired or missing token gets 401; a valid token for another subject or without the scope gets 403 with `error="insufficient_scope"`.
+
+Failed authentication and Host, Origin or throttle rejections are written to stderr as one JSON line with a reason code (for example `ERR_JWT_CLAIM_VALIDATION_FAILED:aud`, `scope_missing` or `sub_mismatch`), the `Cf-Ray`, the client key and, from an unverified decode, the token's `kid`, `iss` and `aud` only. Tokens, the `Authorization` header, `sub` and other claims are never logged. Identical lines are logged at most once a minute with a repeat count.
+
+**Do not put a Cloudflare Access application on the MCP hostname.** Access answers non-browser clients with a redirect to its login page, so MCP clients never see WPBridge's 401 and metadata, and discovery fails. As an extra layer, use Cloudflare WAF rules on the hostname instead: a rate-limiting rule on `/mcp`, a custom rule blocking methods other than GET and POST, and a rule blocking paths other than `/mcp` and the two metadata paths. If the tunnel uses a locally managed `config.yml`, restrict ingress to the same paths and end with `service: http_status:404`.
+
+Start with `npm run mcp:http`. Verify that an unauthenticated POST to `/mcp` returns 401 with `WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="wpbridge:access"`, that both metadata paths return the configured `resource` and a single issuer, and that a foreign `Host` or `Origin` returns 403 and GET `/mcp` returns 405. Then register the HTTPS `/mcp` URL in your client, complete OAuth, and test `list_sites` and a read action before enabling any write class. For ChatGPT, follow the [current OpenAI authentication guide](https://developers.openai.com/plugins/build/auth) for the provider's client registration and callback requirements and the [connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt) for testing. `upload_attached_media` works only with ChatGPT file attachments; other clients cannot supply its files. Keep the plugin private until the end-to-end connection is verified.
 
 ## 5. Validate and operate
 
-Set `PUBLIC_BASE_URL` to an HTTPS bridge origin and run `npm run ci`. Also run `php -l wordpress/wpbridge-control/wpbridge-control.php` and validate the plugin with `python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge`. The automated suite exercises the installed-style stdio launcher, authenticated HTTP transport, gateway routing, and signed OAuth token checks. It does not prove a live WordPress or ChatGPT connection; test each enrolled site separately, including cross-site key isolation and stale preview/version rejection.
+Set `PUBLIC_BASE_URL` to an HTTPS bridge origin and run `npm run ci`. Also run `php -l wordpress/wpbridge-control/wpbridge-control.php` and validate the plugin with `python "$env:USERPROFILE/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" plugins/wpbridge`. The automated suite exercises the installed-style stdio launcher, authenticated HTTP transport, the pre-auth HTTP checks, gateway routing, and signed OAuth token checks. It does not prove a live WordPress or ChatGPT connection; test each enrolled site separately, including cross-site key isolation and stale preview/version rejection.
 
 Over HTTP, `upload_attached_media` adapts ChatGPT file inputs to WPBridge's attachment uploader; stdio clients use `upload_local_media` instead. `downloadMedia` currently returns a file-response URL as JSON; verify it in your MCP client before relying on a full document round trip. Template, navigation, global-style, plugin installation/removal, and user-management controls remain future work.
